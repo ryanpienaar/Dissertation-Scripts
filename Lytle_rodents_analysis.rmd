@@ -1,0 +1,759 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(gtools)
+library(vegan)
+library(lubridate)
+library(ggpubr)
+library(pscl)
+library(glmmTMB)
+library(zoo)
+library(rcompanion)
+library(Rmisc)
+library(MuMIn)
+```
+
+```{r}
+lytle_rodents <- read.csv("Lytle_16_to_23_rodents.csv")
+lytle_rodents <-  lytle_rodents %>% select(c(-EAR..mm.,-HINDFOOT..mm.,-TAIL..mm.,-Comments, -AGE, -RECAPTURE,-OBSERVERS,-TIME..24hr.,-PREGNANT,-CONDITION))
+```
+
+```{r}
+
+
+lytle_rodents[lytle_rodents$SPECIES == "cactus mouse?",4] <- "PEER"
+lytle_rodents[lytle_rodents$SPECIES == "DEIM",4] <- "DIME"
+lytle_rodents[lytle_rodents$SPECIES == "DIEM",4] <- "DIME"
+lytle_rodents[lytle_rodents$SPECIES == "KRAT",4] <- "DIME"
+lytle_rodents[lytle_rodents$SPECIES == "Chipmunk",4] <- "AMLE"
+lytle_rodents[lytle_rodents$SPECIES == "grasshopper",4] <- "ONTO"
+lytle_rodents[lytle_rodents$SPECIES == "grasshopper mouse",4] <- "ONTO"
+lytle_rodents[lytle_rodents$SPECIES == "grasshopper mouse, ONTO",4] <- "ONTO"
+lytle_rodents[lytle_rodents$SPECIES == "grasshopper mouse?",4] <- "ONTO"
+lytle_rodents[lytle_rodents$SPECIES == "grasshopper mouse? ONTO?",4] <- "ONTO"
+lytle_rodents[lytle_rodents$SPECIES == "grasshopper or cactus mouse",4] <- "ONTO"
+lytle_rodents[lytle_rodents$SPECIES == "Woodrat",4] <- "NELE"
+lytle_rodents[lytle_rodents$SPECIES == "NELEL",4] <- "NELE"
+lytle_rodents[lytle_rodents$SPECIES == "PEMA/PECR",4] <- "PEMA"
+
+
+lytle_rodents <- subset(lytle_rodents, SPECIES != "lizard")
+lytle_rodents <- subset(lytle_rodents, SPECIES != "Jack Rabbit")
+lytle_rodents <- subset(lytle_rodents, SPECIES != "X")
+lytle_rodents <- subset(lytle_rodents, SPECIES != "cottontail")
+lytle_rodents <- subset(lytle_rodents, SPECIES != "PEMA/CHFO")
+
+lytle_rodents$EVENT <- format(as.Date(lytle_rodents$DATE, format="%m/%d/%Y"),"%m/%Y")
+
+lytle_rodents$DATE <- as.Date(lytle_rodents$DATE, format = "%m/%d/%Y")
+
+
+```
+
+Create a dataframe of all possible combinations
+
+```{r}
+
+# Define the column values
+years <- 2016:2023
+months <- c(4, 5, 7, 10, 11)
+rodents <- c("N", "S", "C")
+burned <- c("B", "U", "C")
+trap_days <- 1:3
+blocks <- 1:5
+
+
+# Create all possible combinations
+combinations <- expand.grid(Year = years, Month = months, Rodents = rodents,
+                            Burned = burned, `Trap Day` = trap_days, Block = blocks)
+
+combinations<- filter(combinations, Year < 2022 | `Trap Day` < 3)
+
+combinations <- subset(combinations, !(Year == 2016 & !(Month %in% c(4, 7))))
+combinations <- subset(combinations, !(Year == 2017 & !(Month %in% c(4, 7, 10))))
+combinations <- subset(combinations, !(Year == 2018 & !(Month %in% c(4, 7, 10))))
+combinations <- subset(combinations, !(Year == 2019 & !(Month %in% c(5, 11))))
+combinations <- subset(combinations, !(Year == 2020 & !(Month %in% c(4, 7, 10))))
+combinations <- subset(combinations, !(Year == 2021 & !(Month %in% c(4, 10))))
+combinations <- subset(combinations, !(Year == 2022 & !(Month %in% c(4))))
+combinations <- subset(combinations, !(Year == 2023 & !(Month %in% c(4))))
+
+combinations <- filter(combinations, Rodents !=  "C" | Burned != "B")
+combinations <- filter(combinations, Rodents !=  "C" | Burned != "U")
+
+combinations <- filter(combinations, Rodents !=  "N" | Burned != "C")
+combinations <- filter(combinations, Rodents !=  "S" | Burned != "C")
+
+combinations$code <- paste(combinations$Year, combinations$Month, combinations$Rodents, combinations$Burned, combinations$Block, combinations$`Trap Day`)
+
+```
+
+
+This is to create the usable file that takes into account all trapdays including blanks and only using uniqely caught individuals from each trapping event. This is a conservative estimate of abundance
+
+```{r}
+
+#### Create a data file with population estimates per trap event
+
+df <- lytle_rodents
+
+# I need a recapture columns
+
+#### I ask ChatGPT how to find recaptures and this is what it gave me and it works
+df <- df %>% 
+  dplyr::group_by(EVENT, SPECIES, EARTAG..) %>% 
+  dplyr::mutate(Recapture = ifelse(row_number() == 1, "C", "R")) %>% 
+  ungroup()
+
+df$Recapture <-as.factor(df$Recapture)
+
+
+#### This is to make it only uniquely caught individuals
+### To get total captures, we can skip this 
+df <- df[df$Recapture== "C",]
+
+#head(df)
+#head(combinations)
+
+#format so each species is a column with total counts per trapping event
+#we lose mass and sex
+df <- df %>% 
+  dplyr::count(SPECIES, EVENT, BURNED, RODENTS, TRAP.DAY, DATE, BLOCK, PLOT)%>%
+  pivot_wider(names_from = SPECIES, values_from = n) 
+
+df <-na.replace(df, 0) # Replace NA's with 0's
+df$DATE <- as.Date(df$DATE, format = "%m/%d/%Y")
+df$BURNED <- as.factor(df$BURNED)
+df$RODENTS <- as.factor(df$RODENTS)
+
+df$code <- paste(year(df$DATE), month(df$DATE), df$RODENTS, df$BURNED, df$BLOCK, df$TRAP.DAY)
+
+#summary(df)
+
+df <- merge(combinations, df, by = "code", all.x = TRUE)
+
+df<- df %>% select(c(-EVENT, -BURNED, -RODENTS, -TRAP.DAY, -BLOCK, -PLOT))
+
+### I have NA's for certain dates and this is how chatGPT said to fill em in and it works
+
+
+# Iterate over each row of the dataframe
+for (i in 1:nrow(df)) {
+  # Check if 'date' is NA
+  if (is.na(df$DATE[i])) {
+    # Find rows with the same 'year', 'month', and 'trap day'
+    same_date_rows <- df$Year == df$Year[i] &
+      df$Month == df$Month[i] &
+      df$`Trap Day` == df$`Trap Day`[i]
+    # Get the first non-NA value of 'date' from the matching rows
+    replacement_date <- na.omit(df$DATE[same_date_rows])[1]
+    
+    # Replace NA with the 'replacement_date'
+    df$DATE[i] <- replacement_date
+  }
+}
+ #Now go back and re run na.replace
+
+#### Get rid of trap days
+
+df$`Trap Day` <- as.factor(df$`Trap Day`)
+df$Block <- as.factor(df$Block)
+
+##First add climate
+
+lytle_clim <- read.csv("C:/Users/ryanp/Documents/Dissertation/Raw data/Environmental Spatial Data/Climate/PRISM_data_Lytle.csv")
+head(lytle_clim)
+
+ #ggplot(data = lytle_clim, aes(Date, ppt..mm.))+
+#  geom_point()+
+#  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+
+lytle_clim$Date <- as.Date(paste(lytle_clim$Date,01,sep = "-"))
+lytle_clim$EVENT <- format(lytle_clim$Date, "%m/%Y")
+
+lytle_clim$Year <- lubridate::year(lytle_clim$Date)
+lytle_clim$Month <- month(lytle_clim$Date)
+
+df <- merge(df, lytle_clim, all.x = TRUE, by = c("Year", "Month"))
+
+df<- df %>% select(c(-Date))
+df <- na.replace(df,0)
+write.csv(df,"lytle_rodents_16to23.csv")
+
+#Trap Day out
+df <- df %>%
+ dplyr::group_by(Year, Month, Burned, Rodents, Block) %>%
+  dplyr::summarise(across(4:18,sum), across(19:25, mean))
+
+df <- na.replace(df, 0)
+
+
+```
+
+
+
+
+Check if the number of rodents changes over time
+
+
+
+```{r}
+
+rodents_time <- ggplot(data = lytle_rodents, aes(DATE, fill = SPECIES))+
+  geom_bar(width = 50)+
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1))
+
+rodents_time
+
+```
+
+calculate richness and abundance functions
+
+```{r}
+
+calc_rich <- function(data, col_start, col_end) {
+  columns <- c(col_start:col_end)
+  subset_data <- data[, columns]
+  positive_columns_per_row <- rowSums(subset_data > 0)
+  return(positive_columns_per_row)
+}
+
+calc_abun <- function(data, col_start, col_end) {
+  columns <- c(col_start:col_end)
+  subset_data <- data[, columns]
+  total <- rowSums(subset_data)
+  return(total)
+}
+
+```
+
+calculate richness, shannons diversity, simpsons diversity and abundance
+
+
+```{r}
+
+df$RICHNESS <- calc_rich(df,6,20)
+df$SH_DIVERSITY <- diversity(df[,6:20], index = "shannon")
+df$SI_DIVERSITY <- diversity(df[,6:20], index = "simpson")
+df$ABUNDANCE <- calc_abun(df,6,20)
+
+
+```
+
+
+Histograms of metrics
+
+```{r}
+
+hist(df$RICHNESS)
+hist(df$SH_DIVERSITY)
+hist(df$SI_DIVERSITY)
+hist(df$ABUNDANCE)
+
+```
+
+
+
+
+make some graphs
+
+```{r}
+
+attach(df)
+
+ggabun <- ggplot(data = df[df$Burned == c("B", "U"),],  aes(Burned, ABUNDANCE, fill = Rodents))+
+  geom_bar(position = "dodge",
+           stat = "summary",
+           fun = "mean") +
+  stat_summary(geom = "errorbar", fun.data = mean_se, position = position_dodge(0.9), width = 0.2)
+
+ggabun
+
+ggrich <- ggplot(data = df[df$Burned == c("B", "U"),],  aes(Burned, RICHNESS, fill = Rodents))+
+  geom_bar(position = "dodge",
+           stat = "summary",
+           fun = "mean") +
+  stat_summary(geom = "errorbar", fun.data = mean_se, position = position_dodge(0.9), width = 0.2)
+
+ggrich
+
+ggsi <- ggplot(data = df[df$Burned == c("B", "U"),],  aes(Burned, SI_DIVERSITY, fill = Rodents))+
+  geom_bar(position = "dodge",
+           stat = "summary",
+           fun = "mean") +
+  stat_summary(geom = "errorbar", fun.data = mean_se, position = position_dodge(0.9), width = 0.2)
+
+ggsi
+
+ggsh <- ggplot(data = df[df$Burned == c("B", "U"),],  aes(Burned, SH_DIVERSITY, fill = Rodents))+
+  geom_bar(position = "dodge",
+           stat = "summary",
+           fun = "mean") +
+  stat_summary(geom = "errorbar", fun.data = mean_se, position = position_dodge(0.9), width = 0.2)
+
+ggsh
+
+
+
+
+```
+
+Plot the effectiveness of the rodent exclusion over time First have to calculate time since fire to give a numeric x-axis for the regression
+
+```{r}
+
+
+df$TSF <- as.numeric(df$Year-2011)
+
+```
+
+Now plot the regression between abundance in Rodent Exclusion plots and time since fire
+
+```{r}
+
+
+
+ggplot(data = df[df$Rodents=="N",], aes(x=TSF, y=ABUNDANCE))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  stat_regline_equation(label.y = c(8,10), aes(label = after_stat(eq.label))) +
+  stat_regline_equation(label.y = c(7,6), aes(label = after_stat(rr.label)))
+
+```
+
+Test assumptions for linear regression use log for abundance and richness because its one-inflated instead of zero inflated and that corrects it The data is not normal so we're going to go with a Kruskal Wallis instead of an ANOVA, I'm leaving the ANOVA code up above for in case but we will only report on the Kruskal Wallis
+
+\*Update Kruskal Wallis can't handle multiple explanatory variables so I'm switching to Scheiere Ray Hare from the rcompanion package
+
+
+
+Data appears to be zero-inflated That means I'm going to have to use a zero inflated mixed effects model from glmmtmb when accounting for climate data, here is the Scheirer Ray Hare to test the two treatments
+
+```{r}
+
+
+srh_rich<- scheirerRayHare(RICHNESS ~ Burned + Rodents + Burned*Rodents, data = df)
+srh_rich
+
+srh_sh <- scheirerRayHare(data = df, SH_DIVERSITY ~ Burned + Rodents + Burned*Rodents) 
+srh_sh
+
+srh_si <- scheirerRayHare(data = df, SI_DIVERSITY ~ Burned + Rodents + Burned*Rodents)
+srh_si
+
+srh_abun <- scheirerRayHare(data = df, ABUNDANCE ~ Burned + Rodents + Burned*Rodents)
+srh_abun
+
+```
+
+
+
+
+Import climate data for the climate model
+
+I've added annual precip from the scrap code
+
+```{r}
+
+pptrich <- ggplot(data = df, aes(ppt..mm., RICHNESS, color = Burned))+
+  geom_point()+ geom_smooth(method = "lm")+
+  #stat_regline_equation(aes(label = after_stat(eq.label))) +
+  stat_regline_equation(aes(label = after_stat(rr.label)))
+
+pptrich+geom_jitter()
+
+tmrich <- ggplot(data = df, aes(tmean..degrees.C., RICHNESS, color = Burned))+
+  geom_point()+ geom_smooth(method = "lm")+
+  #stat_regline_equation(aes(label = after_stat(eq.label))) +
+  stat_regline_equation(aes(label = after_stat(rr.label)))
+
+tmrich+geom_jitter()
+
+```
+
+So now I've added the climate data for the abundance of each species per treatment, now I can start testing models
+
+First though I have to check for autocorrelated variables because I forgot that. SO I'm going to make a correlation matrix and then remove variables that have a correlation coefficient higher than 0.6.
+
+I get NA's I'm not sure why so thats something I better figure out
+
+```{r}
+
+cor_matrix_pe <- as.matrix(lytle_clim[,c(2:8)])
+
+head(cor_matrix_pe)
+cor(cor_matrix_pe)
+
+
+
+```
+Looks like I only need precip and mean temp
+
+Let me plot them first
+
+```{r}
+
+df$Date <- paste(df$Year,df$Month, 01, sep = "-")
+df$Date <- as.Date(df$Date, format = "%Y-%m-%d")
+df$Plot <- paste(df$Burned,df$Rodents, sep = "")
+
+ppt_plot <- ggplot(data = df, aes(x = Date, y = ppt..mm.)) +
+  geom_line() +
+  labs(x = "Date", y = "Precipitation by month (mm)") +
+  scale_color_discrete(name = "Category")
+
+ppt_plot
+
+tmean_plot <- ggplot(data = df, aes(x = Date, y = tmean..degrees.C.)) +
+  geom_line() +
+  labs(x = "Date", y = "mean monthly temperature") +
+  scale_color_discrete(name = "Category")
+
+tmean_plot
+
+
+```
+
+
+
+Now I'm going to try with my df_p (Richness, Abundance and Diversity), Note this doesn't include mark recapture data yet. All captures are counted in abundance including recaptures, I may go back and fix it
+
+
+
+
+More graphs: I want to show richness, abundance and diversity over time
+
+```{r}
+
+#I'm going to have to get an average of each block 
+df$Date <- paste(df$Year,df$Month, 01, sep = "-")
+df$Date <- as.Date(df$Date, format = "%Y-%m-%d")
+df$Plot <- paste(df$Burned,df$Rodents, sep = "")
+
+
+pd <- position_dodge(0.1) # move them .05 to the left and right
+
+df_rich <- summarySE(df, 
+                        measurevar = c("RICHNESS"),
+                        groupvars = c("Plot", "Date"))
+
+rich_time <- ggplot(data = df_rich, aes(x = Date, y = RICHNESS, group = Plot)) +
+  geom_line(size = 0.5) +
+  geom_point(size = 3, aes(shape = Plot)) +
+  labs(x = "Date", y = "Richness") +
+  scale_shape_manual(values = c(15, 17, 8, 0, 2)) +
+  theme_pubclean()
+
+
+
+df_abun <- summarySE(df, 
+                        measurevar = c("ABUNDANCE"),
+                        groupvars = c("Plot", "Date"))
+
+abun_time <- ggplot(data = df_abun, aes(x = Date, y = ABUNDANCE, group = Plot)) +
+  geom_line(size = 0.5) +
+  geom_point(size = 3, aes(shape = Plot)) +
+  labs(x = "Date", y = "Abundance") +
+  scale_shape_manual(values = c(15, 17, 8, 0, 2)) +
+  theme_pubclean()
+
+
+
+df_sh <- summarySE(df, 
+                        measurevar = c("SH_DIVERSITY"),
+                        groupvars = c("Plot", "Date"))
+
+sh_time <- ggplot(data = df_sh, aes(x = Date, y = SH_DIVERSITY, group = Plot)) +
+  geom_line(size = 0.5) +
+  geom_point(size = 3, aes(shape = Plot)) +
+  labs(x = "Date", y = "Shannon's Diversity") +
+  scale_shape_manual(values = c(15, 17, 8, 0, 2)) +
+  theme_pubclean()
+
+df_si <- summarySE(df, 
+                        measurevar = c("SI_DIVERSITY"),
+                        groupvars = c("Plot", "Date"))
+
+si_time <- ggplot(data = df_si, aes(x = Date, y = SI_DIVERSITY, group = Plot)) +
+  geom_line(size = 0.5) +
+  geom_point(size = 3, aes(shape = Plot)) +
+  labs(x = "Date", y = "Simpsons Diversity") +
+  scale_shape_manual(values = c(15, 17, 8, 0, 2)) +
+  theme_pubclean()
+  
+rich_time
+abun_time
+sh_time
+si_time
+
+
+```
+
+ANOVA's
+```{r}
+
+#### Richness ####
+
+# zero inflated response variable
+
+str(df)
+
+rich_zin <- aov(data = df, RICHNESS ~  Rodents + Burned + Rodents*Burned + (1|Block))
+
+summary(rich_zin)
+
+```
+
+
+
+Models from the graphs
+
+An idea for solving the zero inflation is to do separate analyses on 0 vs >1 that is just counted as 1 and the second analysis without zeros and every number greater than 1 
+
+I need to add all the zeros that were already there though and that breaks it
+
+so this doesnt work so ill just carry on with my zero inflated model
+
+
+
+Add the cumulative precipitation and lag effects
+
+```{r}
+
+##### Create different combinations of rainfall data
+
+combinations$Date <- paste(combinations$Year,combinations$Month,"01", sep = "-")
+clim <- lytle_clim
+
+
+#ChatGPT to calculate previous 3 months precipitation
+# Iterate over each row in the dataframe
+i=0
+for (i in 1:nrow(clim)) {
+  # Check if there are at least three previous rows
+  if (i >= 4) {
+    # Calculate the sum of precipitation for the previous three months
+    prev_3_months_sum <- sum(clim$ppt..mm.[(i-2):i-1])
+    # Assign the sum to the new column in the current row
+    clim$pre3[i] <- prev_3_months_sum
+  }
+}
+
+### 6 Months ###
+i=0
+clim$pre6 <- NA
+for (i in 1:nrow(clim)) {
+  # Check if there are at least three previous rows
+  if (i >= 6) {
+    # Calculate the sum of precipitation for the previous three months
+    prev_3_months_sum <- sum(clim$ppt..mm.[(i-5):i-1])
+    # Assign the sum to the new column in the current row
+    clim$pre6[i] <- prev_3_months_sum
+  }
+}
+
+
+### 12 Months ###
+i=0
+clim$pre12 <- NA
+for (i in 1:nrow(clim)) {
+  # Check if there are at least three previous rows
+  if (i >= 12) {
+    # Calculate the sum of precipitation for the previous three months
+    prev_3_months_sum <- sum(clim$ppt..mm.[(i-11):i-1])
+    # Assign the sum to the new column in the current row
+    clim$pre12[i] <- prev_3_months_sum
+  }
+}
+
+
+##### 1 Year lag ####
+i=0
+clim$lag1 <- NA
+for (i in 1:nrow(clim)) {
+  # Check if there are at least three previous rows
+  if (i >= 13) {
+    # Calculate the sum of precipitation for the previous three months
+    lag <- clim$pre12[i-1]
+    # Assign the sum to the new column in the current row
+    clim$lag1[i] <- lag
+  }
+}
+
+clim <- clim %>% select(Date,pre3,pre6,pre12,lag1)
+
+df <- merge(df, clim, all.x = TRUE, by = "Date")
+
+
+```
+
+
+Time to start building some actual models
+
+```{r}
+
+#### I'm going to start by doing abundance for all of candidate models
+
+df <- df %>% select(Date, Burned, Rodents, Block, ABUNDANCE, RICHNESS, SH_DIVERSITY, SI_DIVERSITY,
+                    ppt..mm., tmean..degrees.C., pre3, pre6, pre12, lag1, TSF)
+
+abun1 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block), 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun2 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block)+Burned, 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun3 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block) + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun4 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block) + Burned + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun5 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block) + Burned + pre12, 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun6 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block) + Burned + pre6, 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun7 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block) + Burned + lag1, 
+                 ziformula = ~1,
+                 family = poisson)
+
+abun8 <- glmmTMB(data = df, ABUNDANCE ~ (1|Block) + Burned + lag1 + TSF, 
+                 ziformula = ~1,
+                 family = poisson)
+
+
+
+#df.ex <- na.exclude(df)
+
+#abun_glob <- glmmTMB(data = df.ex, ABUNDANCE ~ (1|Block) + Burned + lag1 + ppt..mm.+tmean..degrees.C.+
+#                       pre3+ pre6 + pre12,  
+#                 ziformula = ~1,
+#                 family = poisson, na.action = "na.fail")
+
+#dredge(abun_glob)
+
+summary(abun8)
+
+
+model.sel(abun1,abun2, abun3,abun4,abun5,abun6,abun7)
+
+#### Richness
+
+rich1 <- glmmTMB(data = df, RICHNESS ~ (1|Block), 
+                 ziformula = ~1,
+                 family = poisson)
+
+rich2 <- glmmTMB(data = df, RICHNESS ~ (1|Block)+Burned, 
+                 ziformula = ~1,
+                 family = poisson)
+
+rich3 <- glmmTMB(data = df, RICHNESS ~ (1|Block) + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = poisson)
+
+rich4 <- glmmTMB(data = df, RICHNESS ~ (1|Block) + Burned + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = poisson)
+
+rich5 <- glmmTMB(data = df, RICHNESS ~ (1|Block) + Burned + pre12, 
+                 ziformula = ~1,
+                 family = poisson)
+
+rich6 <- glmmTMB(data = df, RICHNESS ~ (1|Block) + Burned + pre6, 
+                 ziformula = ~1,
+                 family = poisson)
+
+rich7 <- glmmTMB(data = df, RICHNESS ~ (1|Block) + Burned + lag1, 
+                 ziformula = ~1,
+                 family = poisson)
+
+summary(rich7)
+
+model.sel(rich1, rich2, rich3, rich4, rich5, rich6, rich7)
+
+### SI_DIVERSITY
+library(mgcv)
+si1 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block), 
+                 ziformula = ~1,
+                 family = poisson)
+
+si2 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block)+Burned, 
+                 ziformula = ~1,
+                 family = poisson)
+
+si3 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block) + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = poisson)
+
+si4 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block) + Burned + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = poisson)
+
+si5 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block) + Burned + pre12, 
+                 ziformula = ~1,
+                 family = poisson)
+
+si6 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block) + Burned + pre6, 
+                 ziformula = ~1,
+                 family = poisson)
+
+si7 <- glmmTMB(data = df, SI_DIVERSITY ~ (1|Block) + Burned + lag1, 
+                 ziformula = ~1,
+                 family = poisson)
+
+summary(si1)
+
+sh1 <- glmmTMB(data = df, SH_DIVERSITY ~ (1|Block), 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+sh2 <- glmmTMB(data = df, SH_DIVERSITY+1 ~ (1|Block)+Burned, 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+
+sh3 <- glmmTMB(data = df, SH_DIVERSITY ~ (1|Block) + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+sh4 <- glmmTMB(data = df, SH_DIVERSITY ~ (1|Block) + Burned + ppt..mm.+tmean..degrees.C., 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+sh5 <- glmmTMB(data = df, SH_DIVERSITY  ~  (1|Block) + Burned + pre12, 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+sh6 <- glmmTMB(data = df, SH_DIVERSITY ~ (1|Block) + Burned + pre6, 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+sh7 <- glmmTMB(data = df, SH_DIVERSITY ~ (1|Block) + Burned + lag1, 
+                 ziformula = ~1,
+                 family = "gaussian")
+
+model.sel(sh1,sh2,sh3,sh4,sh5,sh6,sh7)
+
+summary(sh5)
+
+
+
+```
+
+
+
