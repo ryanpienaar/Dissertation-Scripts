@@ -1,0 +1,100 @@
+---
+title: "Lytle_Climate_Summary"
+author: "R Pienaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Load Packages
+
+```{r}
+
+library(ggplot2)
+library(tidyverse )
+
+```
+
+
+
+Input data
+```{r}
+
+lytle_clim <- read.csv("C:/Users/ryanp/Documents/Dissertation/Raw data/Environmental Spatial Data/Climate/PRISM_data_Lytle.csv")
+
+lytle_clim <- lytle_clim |>
+   mutate(
+    month = as.numeric(format(as.Date(paste0(Date, "-01")), "%m")),
+    season = case_when(
+      month %in% c(10, 11, 12, 1, 2, 3) ~ "Winter",
+      month %in% c(4, 5) ~ "Spring",
+      month %in% c(6, 7, 8, 9) ~ "Summer",
+      TRUE ~ NA_character_
+    )
+  ) 
+
+lytle_clim$Date <-as.Date(paste0(lytle_clim$Date, "-01"), format = "%Y-%m-%d")
+
+head(lytle_clim)
+
+```
+View climate data
+
+```{r}
+
+ggplot(data = lytle_clim, aes(x=Date, y=ppt..mm.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+ggplot(data = lytle_clim, aes(x=Date, y=tmin..degrees.C.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+ggplot(data = lytle_clim, aes(x=Date, y=tmean..degrees.C.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+ggplot(data = lytle_clim, aes(x=Date, y=tmax..degrees.C.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+ggplot(data = lytle_clim, aes(x=Date, y=tdmean..degrees.C.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+ggplot(data = lytle_clim, aes(x=Date, y=vpdmin..hPa.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+ggplot(data = lytle_clim, aes(x=Date, y=vpdmax..hPa.))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme_classic()
+
+
+```
+
+Format data frame
+
+```{r}
+
+reference_date <- as.Date("2010-10-01")
+
+lytle_clim <- lytle_clim %>%
+  mutate(
+    Years_since_treatment = ifelse(Date < reference_date, 
+                                   -1, 
+                                   as.numeric(difftime(Date, reference_date, units = "weeks")) %/% 52)
+  )
+
+head(lytle_clim)
+
+write.csv(lytle_clim, "lytle_clim.csv")
+
+```
+
