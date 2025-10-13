@@ -1,0 +1,1150 @@
+---
+title: "climate_rodent_analysis"
+author: "R Pienaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load libraries
+
+```{r}
+
+install.packages("DHARMa")
+install.packages("performance")
+
+library(DHARMa)
+library(performance)
+library(tidyverse)
+library(ggplot2)
+library(vegan)
+library(lubridate)
+library(caret)
+library(ggpubr)
+library(MuMIn)
+
+```
+
+Input data
+
+```{r}
+
+rodent_data <- read_csv("C:/Users/ryanp/Documents/Dissertation/Raw data/Mojave/Lytle_rodents/Summary_all.csv")
+clim_data <- read.csv("C:/Users/ryanp/Documents/Dissertation/Chapter2_Rodents/Rodent_analysis/lytle_clim.csv")
+
+```
+
+Functions
+
+```{r}
+
+calc_rich <- function(data, col_start, col_end) {
+  columns <- c(col_start:col_end)
+  subset_data <- data[, columns]
+  positive_columns_per_row <- rowSums(subset_data > 0)
+  return(positive_columns_per_row)
+}
+
+calc_abun <- function(data, col_start, col_end) {
+  columns <- c(col_start:col_end)
+  subset_data <- data[, columns]
+  total <- rowSums(subset_data)
+  return(total)
+}
+
+simpsons_diversity <- function(data, col_start, col_end) {
+  counts <- as.numeric(row[col_start:col_end])
+  counts <- counts[!is.na(counts)]
+  n <- sum(counts)
+  if (n == 0) return(0)
+  proportions <- counts / n
+  return(1 - sum(proportions^2))
+}
+
+```
+
+
+
+organize data
+```{r}
+
+
+#head(rodent_data)
+rodent_data <- rodent_data |> replace(is.na(rodent_data),0)
+#summary(rodent_data)
+
+rodent_data <- rodent_data |> 
+  mutate(Date = as.Date(paste("01",Date, sep = "-"), format = "%d-%b-%y"))
+
+clim_data <- clim_data |> 
+  mutate(Date = as.Date(paste("01",Date, sep = "-"), format = "%d-%b-%y"))
+
+rodent_data$abundance <- calc_abun(rodent_data,5,20)
+rodent_data$richness <- calc_rich(rodent_data,5,20)
+rodent_data$simp_div <- diversity(rodent_data[,5:20], index = "simpson")
+rodent_data$shan_div <- diversity(rodent_data[,5:20], index = "shannon")
+
+scale_clim <- scale(clim_data[,3:9])
+
+clim_data[,3:9] <- scale_clim
+
+#head(clim_data)
+#head(data)
+data <- merge(rodent_data, clim_data, by = "Date", all.x = TRUE)
+
+# Create lagged date in climate data
+clim_data <- clim_data %>%
+  mutate(Lagged_Date = Date %m-% years(1))
+
+lagged_clim_data <- clim_data %>%
+  select(Lagged_Date, ppt..mm., tmin..degrees.C., tmean..degrees.C., tmax..degrees.C., tdmean..degrees.C., vpdmin..hPa., vpdmax..hPa.) %>%
+  rename(
+    lag.ppt = ppt..mm.,
+    lag.tmin..degrees.C. = tmin..degrees.C.,
+    lag.tmean = tmean..degrees.C.,
+    lag.tmax..degrees.C. = tmax..degrees.C.,
+    lag.tdmean = tdmean..degrees.C.,
+    lag.vmin = vpdmin..hPa.,
+    lag.vmax = vpdmax..hPa.
+  )
+
+# Merge original data with the climate data
+data <- data %>%
+  left_join(lagged_clim_data, by = c("Date"= "Lagged_Date"))
+
+names <- c("ppt", "tmin", "tmean", "tmax", "tdmean", "vmin", "vmax", "month", "season", "yst", 
+           'lag.ppt', "lag.tmin", "lag.tmean", "lag.tmax", "lag.tdmean", "lag.vmin", "lag.vmax")
+
+colnames(data)[26:42]<- names
+
+data$season <- as.factor(data$season)
+data$Fire <- as.factor(data$Fire)
+data$BLOCK <- as.factor(data$BLOCK)
+
+```
+
+
+Explore
+
+```{r, fig.height=8, fig.width=10}
+
+# Total rodents Across all Plots
+ggplot(data = data, aes(x=Date, y=abundance))+
+  geom_smooth()+
+  theme_classic()
+
+# Compare rodents access to rodent exclusion over time
+ggplot(data = data, aes(x=Date, y=abundance, color = Rodents))+
+  geom_smooth()+
+  theme_classic()
+
+# Compare burned to unburned over time but we're only going to use rodent access from here
+data <- data[data$Rodents=="S",]
+
+# Question 1: Rodent abundance burned vs unburned
+plotq1_1 <- ggplot(data = data, aes(x=Date, y=abundance, color = Fire))+
+  geom_smooth()+
+  theme_classic()+
+  xlab("Year")+
+  ylab("Abundance")+
+  scale_color_manual(values = c("U" = "green4", "B"= "black"),label = c("Burned", 
+                            "Unburned"))+
+  theme(plot.title    = element_text(size=12, family = "serif", colour = "black"),
+        plot.subtitle = element_text(size=12, family = "serif"),
+        axis.title.x  = element_text(size=12, family = "serif", colour = "black"),
+        axis.title.y  = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.x   = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.y   = element_text(size=12, family = "serif", colour = "black"),
+        legend.text   = element_text(size=12, family = "serif", colour = "black"),
+        legend.title  = element_text(size=12, family = "serif", colour = "black"),
+        panel.border  = element_blank())
+
+
+
+# Question 1: Rodent species richness burned vs unburned
+
+plotq1_2 <- ggplot(data = data, aes(x=Date, y=richness, color = Fire))+
+  geom_smooth()+
+  theme_classic()+
+  xlab("Year")+
+  ylab("Species Richness")+
+  scale_color_manual(values = c("U" = "green4", "B"= "black"),label = c("Burned", 
+                            "Unburned"))+
+  theme(plot.title    = element_text(size=12, family = "serif", colour = "black"),
+        plot.subtitle = element_text(size=12, family = "serif"),
+        axis.title.x  = element_text(size=12, family = "serif", colour = "black"),
+        axis.title.y  = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.x   = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.y   = element_text(size=12, family = "serif", colour = "black"),
+        legend.text   = element_text(size=12, family = "serif", colour = "black"),
+        legend.title  = element_text(size=12, family = "serif", colour = "black"),
+        panel.border  = element_blank())
+
+# Question 1: Simpsons diversity burned vs unburned
+
+plotq1_3 <- ggplot(data = data, aes(x=Date, y=simp_div, color = Fire))+
+  geom_smooth()+
+  theme_classic()+
+  xlab("Year")+
+  ylab("Simpsons Diversity")+
+  scale_color_manual(values = c("U" = "green4", "B"= "black"),label = c("Burned", 
+                            "Unburned"))+
+  theme(plot.title    = element_text(size=12, family = "serif", colour = "black"),
+        plot.subtitle = element_text(size=12, family = "serif"),
+        axis.title.x  = element_text(size=12, family = "serif", colour = "black"),
+        axis.title.y  = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.x   = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.y   = element_text(size=12, family = "serif", colour = "black"),
+        legend.text   = element_text(size=12, family = "serif", colour = "black"),
+        legend.title  = element_text(size=12, family = "serif", colour = "black"),
+        panel.border  = element_blank())
+
+# Question 1: Shannons diversity burned vs unburned
+
+plotq1_4 <- ggplot(data = data, aes(x=Date, y=shan_div, color = Fire))+
+  geom_smooth()+
+  theme_classic()+
+  xlab("Year")+
+  ylab("Shannons Diversity")+
+  scale_color_manual(values = c("U" = "green4", "B"= "black"),label = c("Burned", 
+                            "Unburned"))+
+  theme(plot.title    = element_text(size=12, family = "serif", colour = "black"),
+        plot.subtitle = element_text(size=12, family = "serif"),
+        axis.title.x  = element_text(size=12, family = "serif", colour = "black"),
+        axis.title.y  = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.x   = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.y   = element_text(size=12, family = "serif", colour = "black"),
+        legend.text   = element_text(size=12, family = "serif", colour = "black"),
+        legend.title  = element_text(size=12, family = "serif", colour = "black"),
+        panel.border  = element_blank())
+
+q1plot <- ggarrange(plotq1_1,plotq1_2,plotq1_3,plotq1_4,
+                    labels = c("A", "B", "C", "D"),
+                    ncol = 2, nrow = 2,
+                    common.legend = TRUE,
+                    legend = "right",
+                    font.label=list(color="black",size=12,family = "serif"))
+
+q1plot
+
+```
+Do an ANOVA for question 1 to determine if there is a difference between burned and unburned areas
+
+```{r}
+
+head(data)
+
+str(data)
+data$BLOCK <- as.numeric(data$BLOCK)
+ano.abun <- aov(data = data, abundance~Fire*Date + (1|BLOCK))
+summary(ano.abun)
+
+ano.rich <- aov(data = data, richness~ Fire*Date + (1|BLOCK))
+summary(ano.rich)
+
+ano.si <- aov(data = data, simp_div~ Fire*Date + (1|BLOCK))
+summary(ano.si)
+
+ano.sh <- aov(data = data, shan_div ~ Fire*Date + (1|BLOCK))
+summary(ano.sh)
+
+
+```
+
+
+Start the analysis
+
+Check for correlation in the data
+
+```{r}
+
+clim_matrix <- as.matrix(data[seq(from =1, to =301, by = 10),26:32])
+clim_matrix <- na.omit(clim_matrix)
+cor(clim_matrix)
+
+# Keep tmean because all temps are correlated, keep vpdmax over vpdmin
+
+
+
+```
+Reduce Climate covariates to tmean, tdmean and ppt
+
+Add the previous samples abundance as a covariate
+
+```{r}
+
+data <- data |>
+  arrange(BLOCK, Fire, Date) |>
+  group_by(BLOCK, Fire) |>
+  mutate(lag.abun = lag(abundance))
+
+data[,c(1,21,43)]
+
+```
+
+
+Use different types of models
+First will be a linear mixed effects model
+
+```{r}
+
+library(lmerTest)
+library(lme4)
+
+### Split training and testing data
+
+set.seed(123)
+split <- initial_split(data, prop = 0.75)
+
+train <- training(split)
+train <- na.omit(train)
+test <- testing(split)
+test <- na.omit(test)
+
+```
+
+Direct comparison between burned and unburned plots
+
+```{r}
+
+ggplot(data = data, aes(x= Fire, y = abundance))+
+ stat_summary(geom = "bar", fun = mean, position = "dodge", width = 0.3)+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.1, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,12))+
+  coord_cartesian(ylim=c(0, 4))+
+  ylab("Abundance")
+
+ggplot(data = data, aes(x= Fire, y = richness))+
+ stat_summary(geom = "bar", fun = mean, position = "dodge", width = 0.3)+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.1, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,6))+
+  coord_cartesian(ylim=c(0, 2)) +
+  ylab("Species Richness")
+
+ggplot(data = data, aes(x= Fire, y = simp_div))+
+ stat_summary(geom = "bar", fun = mean, position = "dodge", width = 0.3)+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.1, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,6))+
+  coord_cartesian(ylim=c(0, 1))+
+  ylab("Simpsons Diversity")
+
+ggplot(data = data, aes(x= Fire, y = shan_div))+
+ stat_summary(geom = "bar", fun = mean, position = "dodge", width = 0.3)+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.1, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,6))+
+  coord_cartesian(ylim=c(0, 1))+
+  ylab("Shannons Diversity")
+
+```
+Break it up by response variable
+
+#Abundance GLMS
+
+```{r}
+
+ggplot(data = train, aes(y = abundance, x = yst, colour = Fire))+
+  geom_smooth()+
+  theme_classic()
+
+ggplot(data = na.omit(train), aes(y = abundance, x = season, fill = Fire))+
+  stat_summary(geom = "bar", fun = mean, position = "dodge")+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.2, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,12))+
+  coord_cartesian(ylim=c(0, 5))+
+  ylab("Abundance")
+
+```
+
+
+Information Theoretic Approach
+
+Create 10 Models with less than 10 covariates each with a hypothesis as to why that would be a an appropriate model
+
+
+```{r}
+
+library(lme4)
+
+data$BLOCK <- as.factor(data$BLOCK)
+
+###
+
+abun.null <- glmer(data = train, abundance ~ 1 +(1|BLOCK/yst), family = "poisson") # Null Model
+
+abun.global <- glmer(data = train, abundance ~ ppt + lag.ppt + tmean + lag.tmean
+                     + tdmean + lag.tdmean + Fire + (1|BLOCK/yst), family = "poisson") # Hyp: All factors contribute to rodent abundance
+
+abun.fire <- glmer(data = train, abundance ~ Fire + (1|BLOCK/yst), family = "poisson") # Hyp: Fire is the main driver of rodent abundance through vegetation removal
+
+abun.current <- glmer(data = train, abundance ~ ppt + tmean + tdmean + (1|BLOCK/yst),
+                      family = "poisson")                                             # Hyp: Current weather conditions drive rodent abundance
+
+abun.lag <- glmer(data = train, abundance ~ lag.ppt + lag.tmean + lag.tdmean + (1|BLOCK/yst),
+                      family = "poisson")                                             # Hyp: Previous years weather drives rodent abundance
+
+abun.ppt <- glmer(data = train, abundance ~ lag.ppt + ppt  + (1|BLOCK/yst),
+                      family = "poisson")                                             # Hyp: Precipitation drives rodent abundance
+
+abun.temp <- glmer(data = train, abundance ~ tmean + lag.tmean + tdmean + lag.tdmean +
+                     (1|BLOCK/yst), family = "poisson")                               # Hyp: Temperature drives rodent abundance
+
+abun.fire.ppt <- glmer(data = train, abundance ~ ppt * Fire + lag.ppt * Fire +
+                         (1|BLOCK/yst), family = "poisson")                               # Hyp: Interaction between fire and precipitation drives rodent abundance
+
+abun.fire.temp <- glmer(data = train, abundance ~ Fire * tmean + Fire * tdmean +
+                          Fire * lag.tmean + Fire * lag.tdmean +(1|BLOCK/yst),
+                        family = "poisson")                                         # Hyp: The interaction between fire and temperature drives rodent abundance
+
+abun.sel <- model.sel(abun.null, abun.global, abun.fire, abun.current, abun.lag,
+                      abun.ppt, abun.temp, abun.fire.ppt, abun.fire.temp)
+
+abun.sel
+
+```
+
+Validate model
+
+```{r}
+
+
+testDispersion(abun.lag)
+
+testZeroInflation(abun.lag)
+
+performance(abun.lag)
+
+simulateResiduals(abun.lag, plot = TRUE)
+
+```
+
+Validate best model
+
+```{r}
+
+par(mfrow=c(2,1))
+qqnorm(resid(abun.lag), main="normal qq-plot, residuals")
+qqline(resid(abun.lag))
+
+#qqnorm(ranef(abun8)$id[,1])
+#qqline(ranef(abun8)$id[,1])
+
+plot(fitted(abun.lag), resid(abun.lag)) #residuals vs fitted
+abline(h=0)
+
+
+#dat_kackle$fitted <- fitted(abun8)    #fitted vs observed
+#plot(your_data$fitted, jitter(your_data$total,0.1))
+#abline(0,1)
+
+```
+
+Cross validate best model
+
+```{r}
+
+abun.lag.pred <- predict(abun.lag, test)
+
+plot(test$abundance, abun.lag.pred)
+
+summary(lm(test$abundance~ abun.lag.pred))
+
+```
+
+
+
+## Abundance Random Forest
+
+```{r}
+
+library(randomForest)
+library(pROC)
+
+rfdata <- na.omit(train)
+rftest <- na.omit(test)
+head(rfdata)
+rfdata[1:6,-c(5:20)]
+
+set.seed(123)
+
+abun.rf <- randomForest(data = rfdata, abundance ~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst )
+
+abun.rf
+
+# Version 2
+
+abun.rf2 <- randomForest(data = rfdata, abundance ~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst +lag.abun)
+abun.rf2
+
+plot(abun.rf)
+
+varImpPlot(abun.rf)
+
+varimp <- data.frame(abun.rf$importance)
+
+varimp$variable <- rownames(varimp)
+
+varimp <- varimp[order(varimp$IncNodePurity),]
+
+head(varimp)
+
+ggplot(data= varimp, aes(x= fct_reorder(variable, IncNodePurity), y = IncNodePurity))+
+  geom_col()+
+  theme_classic()+
+  ylab("Relative variable importance")+
+  xlab("Variable")+
+  theme(plot.title    = element_text(size=12, family = "serif", colour = "black"),
+        plot.subtitle = element_text(size=12, family = "serif"),
+        axis.title.x  = element_text(size=12, family = "serif", colour = "black"),
+        axis.title.y  = element_text(size=12, family = "serif", colour = "black"),
+        axis.text.x   = element_text(size=12, family = "serif", colour = "black", angle = 45, hjust = 1),
+        axis.text.y   = element_text(size=12, family = "serif", colour = "black"),
+        legend.text   = element_text(size=12, family = "serif", colour = "black"),
+        legend.title  = element_text(size=12, family = "serif", colour = "black"),
+        panel.border  = element_blank())
+
+
+
+abun.rf.pred <- predict(abun.rf, newdata = rftest)
+
+plot(abun.rf.pred, test$abundance)
+summary(lm(abun.rf.pred~ test$abundance))
+
+roc.rf.abun <- roc(rftest$abundance, abun.rf.pred)
+
+auc(roc.rf.abun)
+
+#### Repeat RF but with k-folds cross validation ####
+
+custom_control <- trainControl(
+  method = "cv",       # Cross-validation
+  number = 5,          # Number of folds
+  verboseIter = TRUE,  # Output the progress
+  savePredictions = "final"
+)
+
+set.seed(123)  # Set seed for reproducibility
+rf_abun_model <- train(
+  abundance~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst,            # Formula for the model
+  data = rfdata,            # Data to be used
+  method = "cforest",   # SVM with radial basis function kernel
+  trControl = custom_control,
+  tuneLength = 10         # Tune over 10 different parameter values
+)
+print(rf_abun_model)
+
+typeof(abun.rf)
+
+typeof(rf_abun_model)
+
+
+```
+
+Try the random forest but with seasonal precipitation
+
+```{r}
+
+season_rf <- rfdata
+summary(season_rf$season)
+season_rf <-season_rf %>%
+  mutate(season = factor(season, levels = c("Spring", "Summer", "Winter"))) %>%  # Ensure correct order
+  pivot_wider(names_from = season, values_from = lag.ppt, names_prefix = "lag.ppt_")
+
+```
+
+
+
+## Abundance SVM
+
+Get an abundance SVM classification, see what that looks like
+```{r}
+
+
+library(e1071)
+
+
+
+### Single SVM ###
+svm.abun <- svm(data=  rfdata, abundance~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst, kernel = "radial", cost = 5)
+
+svm.abun
+
+svm.abun.pred <- predict(svm.abun, newdata = rftest)
+
+plot(svm.abun.pred, rftest$abundance)
+
+summary(lm(svm.abun.pred~ rftest$abundance))
+sqrt(mean((svm.abun.pred - rftest$abundance)^2))
+
+roc.svm.abun <- roc(rftest$abundance, svm.abun.pred)
+
+auc(roc.svm.abun)
+
+
+# Calculate R-squared (R²)
+ss_total <- sum((rftest$abundance - mean(rftest$abundance))^2)
+ss_res <- sum((svm.abun.pred - rftest$abundance)^2)
+r_squared <- 1 - (ss_res / ss_total)
+print(paste("R-squared:", r_squared))
+
+### why not just lm for r sqaured
+summary(lm(rftest$abundance~svm.abun.pred))
+
+
+#### Repeat SVM but with k-folds cross validation ####
+
+custom_control <- trainControl(
+  method = "cv",       # Cross-validation
+  number = 5,          # Number of folds
+  verboseIter = TRUE,  # Output the progress
+  savePredictions = "final"
+)
+
+set.seed(123)  # Set seed for reproducibility
+svm_abun_model <- train(
+  abundance~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst,            # Formula for the model
+  data = rfdata,            # Data to be used
+  method = "svmRadial",   # SVM with radial basis function kernel
+  trControl = custom_control,
+  tuneLength = 10         # Tune over 10 different parameter values
+)
+print(svm_abun_model)
+
+
+
+
+```
+
+## Abundance K-Nearest neighbor
+
+```{r}
+
+library(class)
+
+knn_abun_model <- knnreg(abundance~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst,
+                         k=1,
+                         data = rfdata)
+
+
+summary(knn_abun_model)
+
+knn_abun_pred <- predict(knn_abun_model, rftest)
+knn_abun_pred
+
+plot(knn_abun_pred, rftest$abundance)
+summary(lm(knn_abun_pred~ rftest$abundance))
+
+
+# No kfold cross validation method??
+
+```
+## Abundance NN
+
+```{r, warning=FALSE}
+
+library(neuralnet)
+
+rfdata_dummy <- model.matrix(~ Fire + tmin + tmean + tmax + tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax + lag.tdmean + lag.vmax + lag.vmin + season + yst, data = rfdata)
+
+rfdata_dummy <- data.frame(abundance = rfdata$abundance, rfdata_dummy)
+
+rftest_dummy <- model.matrix(~ Fire + tmin + tmean + tmax + tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax + lag.tdmean + lag.vmax + lag.vmin + season + yst, data = rftest)
+
+
+nn_abun_model <- neuralnet(abundance~ FireU + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ seasonSummer+ seasonWinter + yst,
+                          data = rfdata_dummy)
+
+nn_abun_pred <- predict(nn_abun_model, rftest_dummy)
+
+summary(lm(nn_abun_pred ~ rftest$abundance))
+
+#### Repeat Neuaral Net but with k-folds cross validation ####
+
+custom_control <- trainControl(
+  method = "cv",       # Cross-validation
+  number = 5,          # Number of folds
+  verboseIter = TRUE,  # Output the progress
+  savePredictions = "final"
+)
+
+set.seed(123)  # Set seed for reproducibility
+nn_abun_model <- train(
+  abundance~ FireU + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ seasonSummer+ seasonWinter + yst,# Formula for the model
+  data = rfdata_dummy,            # Data to be used
+  method = "neuralnet",   # 
+  trControl = custom_control,
+  tuneLength = 10         # Tune over 10 different parameter values
+)
+print(nn_abun_model)
+
+
+
+```
+
+
+## Abundance XGBoost
+
+```{r}
+
+options(warn = -1)
+
+library(xgboost)
+library(Ckmeans.1d.dp)
+library(gbm)
+
+
+rfdata_dummy <- model.matrix(~ Fire + tmin + tmean + tmax + tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax + lag.tdmean + lag.vmax + lag.vmin + season + yst, data = rfdata)
+
+xgdata <- xgb.DMatrix(rfdata_dummy, label= rfdata$abundance)
+
+rfdata_dummy <- data.frame(abundance = rfdata$abundance, rfdata_dummy)
+
+
+xg_abun_model <- xgboost(data = xgdata, 
+              objective="reg:squarederror", 
+              nrounds = 50, 
+              verbose = 0)
+
+
+xgb.importance(model = xg_abun_model)
+xgb.ggplot.importance(xgb.importance(model = xg_abun_model), measure = "Frequency")
+
+#### Repeat Neural Net but with k-folds cross validation ####
+
+custom_control <- trainControl(
+  method = "cv",       # Cross-validation
+  number = 5,          # Number of folds
+  verboseIter = TRUE,  # Output the progress
+  savePredictions = "final"
+)
+
+set.seed(123)  # Set seed for reproducibility
+xg_abun_model <- train(
+  abundance~ FireU + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ seasonSummer+ seasonWinter + yst,# Formula for the model
+  data = rfdata_dummy,            # Data to be used
+  method = "xgbTree",   # 
+  trControl = custom_control,
+  tuneLength = 10,# Tune over 10 different parameter values
+  verbose = FALSE,
+  verbosity = 0)
+print(xg_abun_model)
+
+```
+
+
+
+#Richness
+
+##Fire and Time
+
+Lets start with a model of time and fire to see how they affect the 4 metrics
+
+```{r}
+
+rich.ft <- glmer(data = train, richness ~ Fire + yst + Fire * yst+(1|BLOCK), family = "poisson")
+summary(rich.ft)
+
+rich.fs <- glmer(data = train, richness ~ Fire + season + Fire * season+(1|BLOCK), family = "poisson")
+summary(rich.fs)
+
+rich.fp <- glmer(data = train, richness ~ Fire + ppt + Fire * ppt+(1|BLOCK), family = "poisson")
+summary(rich.fp)
+
+rich.ft <- glmer(data = train, richness ~ Fire + tmean + Fire * tmean+(1|BLOCK), family = "poisson")
+summary(rich.ft)
+
+rich.ftd <- glmer(data = train, richness ~ Fire + tdmean + Fire * tdmean+(1|BLOCK), family = "poisson")
+summary(rich.ftd)
+
+rich.fv <- glmer(data = train, richness ~ Fire + vmax + Fire * vmin+(1|BLOCK), family = "poisson")
+summary(rich.fv)
+
+rich.flp <- glmer(data = train, richness ~ Fire + lag.ppt + Fire * lag.ppt+(1|BLOCK), family = "poisson")
+summary(rich.flp)
+
+rich.flt <- glmer(data = train, richness ~ Fire + lag.tmean + Fire * lag.tmean+(1|BLOCK), family = "poisson")
+summary(rich.flt)
+
+rich.fltd <- glmer(data = train, richness ~ Fire + lag.tdmean + Fire * lag.tdmean+(1|BLOCK), family = "poisson")
+summary(rich.fltd)
+
+rich.flv <- glmer(data = train, richness ~ Fire + lag.vmin + Fire * lag.vmin+(1|BLOCK), family = "poisson")
+summary(rich.flv)
+
+rich.sel <- model.sel(rich.flp, rich.flt, rich.fltd, rich.flv, rich.fp, rich.fs, rich.ft, rich.ftd, rich.fv)
+rich.sel
+
+
+ggplot(data = train, aes(y = richness, x = yst, colour = Fire))+
+  geom_smooth()+
+  theme_classic()
+
+ggplot(data = na.omit(train), aes(y = richness, x = season, fill = Fire))+
+  stat_summary(geom = "bar", fun = mean, position = "dodge")+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.2, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,6))+
+  coord_cartesian(ylim=c(0, 3))+
+  ylab("Species Richness")
+
+
+```
+
+
+
+## Complex model selection
+
+```{r}
+
+rich1 <- glmer(data = train, richness ~ yst + lag.tdmean + Fire + vmin+(1|BLOCK), family = "poisson")
+rich2 <- glmer(data = train, richness ~ yst + lag.tdmean + Fire + ppt+(1|BLOCK), family = "poisson")
+rich3 <- glmer(data = train, richness ~ yst + tdmean + Fire + vmin+(1|BLOCK), family = "poisson")
+rich4 <- glmer(data = train, richness ~ yst + lag.tdmean + Fire + lag.ppt+(1|BLOCK), family = "poisson")
+rich5 <- glmer(data = train, richness ~ lag.ppt + lag.tdmean + Fire + vmin+(1|BLOCK), family = "poisson")
+rich6 <- glmer(data = train, richness ~ ppt + yst + Fire+(1|BLOCK), family = "poisson")
+rich7 <- glmer(data = train, richness ~ ppt + yst + Fire + lag.ppt+(1|BLOCK), family = "poisson")
+
+
+rich.sel <- model.sel(rich.flp, rich.flt, rich.fltd, rich.flv, rich.fp, rich.fs, rich.ft, rich.ftd, rich.fv,
+                      rich1, rich2, rich3, rich4, rich5, rich6, rich7)
+rich.sel
+
+abuntest <- glmmTMB(data = train, abundance ~ ppt + yst + Fire + lag.ppt + (1|BLOCK/yst), family = poisson)
+
+table(train$BLOCK)
+table(train$BLOCK, train$yst)
+performance(abuntest)
+
+summary(abuntest)
+
+testDispersion(rich4)
+testZeroInflation(rich4)
+
+```
+Evaluate linear models
+
+```{r}
+
+rich.pred <- predict(rich4,newdata = test)
+
+summary(lm(rich.pred~test$richness))
+
+```
+
+
+## Richness Random Forest
+
+```{r}
+
+rich.rf <- randomForest(data = rfdata, richness ~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst)
+
+rich.rf
+
+plot(rich.rf)
+
+varImpPlot(rich.rf)
+
+rich.rf.pred <- predict(rich.rf, newdata = rftest)
+
+roc.rf.rich <- roc(rftest$richness, rich.rf.pred)
+
+auc(roc.rf.rich)
+
+```
+
+##Richness SVM
+
+
+#Simpsons Diversty
+
+
+
+Lets start with a model of time and fire to see how they affect the 4 metrics
+
+```{r}
+
+
+si.ft <- glmer(data = train, simp_div ~ Fire + yst + Fire * yst+(1|BLOCK))
+summary(si.ft)
+
+si.fs <- glmer(data = train, simp_div ~ Fire + season + Fire * season+(1|BLOCK))
+summary(si.fs)
+
+si.fp <- glmer(data = train, simp_div ~ Fire + ppt + Fire * ppt+(1|BLOCK))
+summary(si.fp)
+
+si.ft <- glmer(data = train, simp_div ~ Fire + tmean + Fire * tmean+(1|BLOCK))
+summary(si.ft)
+
+si.ftd <- glmer(data = train, simp_div ~ Fire + tdmean + Fire * tdmean+(1|BLOCK))
+summary(si.ftd)
+
+si.fv <- glmer(data = train, simp_div ~ Fire + vmax + Fire * vmin+(1|BLOCK))
+summary(si.fv)
+
+si.flp <- glmer(data = train, simp_div ~ Fire + lag.ppt + Fire * lag.ppt+(1|BLOCK))
+summary(si.flp)
+
+si.flt <- glmer(data = train, simp_div ~ Fire + lag.tmean + Fire * lag.tmean+(1|BLOCK))
+summary(si.flt)
+
+si.fltd <- glmer(data = train, simp_div ~ Fire + lag.tdmean + Fire * lag.tdmean+(1|BLOCK))
+summary(si.fltd)
+
+si.flv <- glmer(data = train, simp_div ~ Fire + lag.vmin + Fire * lag.vmin+(1|BLOCK))
+summary(si.flv)
+
+si.sel <- model.sel(si.flp, si.flt, si.fltd, si.flv, si.fp, si.fs, si.ft, si.ftd, si.fv)
+si.sel
+
+
+
+ggplot(data = train, aes(y = simp_div, x = yst, colour = Fire))+
+  geom_smooth()+
+  theme_classic()
+
+ggplot(data = na.omit(train), aes(y = simp_div, x = season, fill = Fire))+
+  stat_summary(geom = "bar", fun = mean, position = "dodge")+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.2, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,6))+
+  coord_cartesian(ylim=c(0, 1))+
+  ylab("Simpsons Diversity")
+
+
+```
+
+
+
+## Simple model comparison
+
+```{r}
+
+si.sel <- model.sel(si.flp, si.flt, si.fltd, si.flv, si.fp, si.fs, si.ft, si.ftd, si.fv)
+si.sel
+
+```
+
+## Complex model selection
+
+```{r}
+
+si1 <- glmer(data = train, simp_div ~ yst + lag.tdmean + Fire + vmin + (1|BLOCK))
+si2 <- glmer(data = train, simp_div ~ yst + lag.tdmean + Fire + ppt + (1|BLOCK))
+si3 <- glmer(data = train, simp_div ~ yst + tdmean + Fire + vmin + (1|BLOCK))
+si4 <- glmer(data = train, simp_div ~ yst + lag.tdmean + Fire + lag.ppt + (1|BLOCK))
+si5 <- glmer(data = train, simp_div ~ lag.ppt + lag.tdmean + Fire + vmin + (1|BLOCK))
+si6 <- glmer(data = train, simp_div ~ ppt + yst + Fire + (1|BLOCK))
+si7 <- glmer(data = train, simp_div ~ ppt + yst + Fire + lag.ppt + (1|BLOCK))
+
+
+si.sel <- model.sel(si.flp, si.flt, si.fltd, si.flv, si.fp, si.fs, si.ft, si.ftd, si.fv,
+                      si1, si2, si3, si4, si5, si6, si7)
+si.sel
+
+
+```
+
+Validate model
+
+```{r}
+
+si.pred <- predict(si.flp, newdata = test)
+
+plot(si.pred, test$simp_div)
+
+summary(lm(si.pred~test$simp_div))
+
+```
+
+
+
+
+## Simpsons diversity Random Forest
+
+```{r}
+
+si.rf <- randomForest(data = rfdata, simp_div ~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst)
+
+si.rf
+
+plot(si.rf)
+
+varImpPlot(si.rf)
+
+si.rf.pred <- predict(si.rf, newdata = rftest)
+
+roc.rf.si <- roc(rftest$simp_div, si.rf.pred)
+
+auc(roc.rf.rich)
+
+summary(lm(si.rf.pred~test$simp_div))
+
+```
+
+
+
+#Shannons Diversity
+
+
+
+Lets start with a model of time and fire to see how they affect the 4 metrics
+
+```{r}
+
+sh.ft <- glmer(data = train, shan_div ~ Fire + yst + Fire * yst+ (1|BLOCK))
+summary(sh.ft)
+
+sh.fs <- glmer(data = train, shan_div ~ Fire + season + Fire * season+ (1|BLOCK))
+summary(sh.fs)
+
+sh.fp <- glmer(data = train, shan_div ~ Fire + ppt + Fire * ppt+ (1|BLOCK))
+summary(sh.fp)
+
+sh.ft <- glmer(data = train, shan_div ~ Fire + tmean + Fire * tmean+ (1|BLOCK))
+summary(sh.ft)
+
+sh.ftd <- glmer(data = train, shan_div ~ Fire + tdmean + Fire * tdmean+ (1|BLOCK))
+summary(sh.ftd)
+
+sh.fv <- glmer(data = train, shan_div ~ Fire + vmax + Fire * vmax+ (1|BLOCK))
+summary(sh.fv)
+
+sh.flp <- glmer(data = train, shan_div ~ Fire + lag.ppt + Fire * lag.ppt+ (1|BLOCK))
+summary(sh.flp)
+
+sh.flt <- glmer(data = train, shan_div ~ Fire + lag.tmean + Fire * lag.tmean+ (1|BLOCK))
+summary(abun.flt)
+
+sh.fltd <- glmer(data = train, shan_div ~ Fire + lag.tdmean + Fire * lag.tdmean+ (1|BLOCK))
+summary(abun.fltd)
+
+sh.flv <- glmer(data = train, shan_div ~ Fire + lag.vmax + Fire * lag.vmax+ (1|BLOCK))
+summary(abun.flv)
+
+
+ggplot(data = train, aes(y = shan_div, x = yst, colour = Fire))+
+  geom_smooth()+
+  theme_classic()
+
+ggplot(data = na.omit(train), aes(y = shan_div, x = season, fill = Fire))+
+  stat_summary(geom = "bar", fun = mean, position = "dodge")+
+  stat_summary(geom = "errorbar", fun.data = mean_se, width = 0.2, position = position_dodge(0.9))+
+  theme_classic()+
+ scale_y_continuous(expand = c(0, 0), limits = c(0,6))+
+  coord_cartesian(ylim=c(0, 1))+
+  ylab("Shannons Diversity")
+
+
+```
+
+
+
+# Simple model selectoin
+
+```{r}
+
+sh.sel <- model.sel(sh.flp, sh.flt, sh.fltd,sh.flv, sh.fp, sh.fs,sh.ft, sh.ftd, sh.fv)
+sh.sel
+
+```
+## Complex model selection
+
+```{r}
+
+library(glmmTMB)
+
+sh1 <- glmmTMB(data = train, shan_div ~ yst + lag.tdmean + Fire + vmin + (1|BLOCK),  
+               zi =~  yst + lag.tdmean + Fire + vmin + (1|BLOCK), family = nbinom2)
+
+sh2 <- glmmTMB(data = train, shan_div ~ yst + lag.tdmean + Fire + ppt + (1|BLOCK),
+             zi =~  yst + lag.tdmean + Fire + ppt + (1|BLOCK), family = nbinom2)
+
+sh3 <- glmmTMB(data = train, shan_div ~ yst + tdmean + Fire + vmin + (1|BLOCK),
+             zi=~ yst + tdmean + Fire + vmin + (1|BLOCK), family = nbinom2)
+
+sh4 <- glmmTMB(data = train, shan_div ~ yst + lag.tdmean + Fire + lag.ppt + (1|BLOCK),
+             zi =~ yst + lag.tdmean + Fire + lag.ppt + (1|BLOCK), family = nbinom2)
+
+sh5 <- glmmTMB(data = train, shan_div ~ lag.ppt + lag.tdmean + Fire + vmin + (1|BLOCK),
+             zi=~ lag.ppt + lag.tdmean + Fire + vmin + (1|BLOCK), family = nbinom2)
+
+sh6 <- glmmTMB(data = train, shan_div ~ ppt + yst + Fire + (1|BLOCK),
+             zi =~ ppt + yst + Fire + (1|BLOCK), family = nbinom2)
+
+sh7 <- glmmTMB(data = train, shan_div ~ ppt + yst + Fire + lag.ppt + (1|BLOCK),
+             zi =~ ppt + yst + Fire + lag.ppt + (1|BLOCK), family = nbinom2)
+
+sh.sel <- model.sel(sh.flp, sh.flt, sh.fltd,sh.flv, sh.fp, sh.fs,sh.ft, sh.ftd, sh.fv, sh1, sh2, sh3,
+                    sh4, sh5, sh6, sh7)
+sh.sel
+
+
+```
+
+Check r squared
+
+```{r}
+
+sh.pred <- predict(sh.flp, newdata = test)
+
+plot(sh.pred, test$shan_div)
+
+summary(lm(sh.pred~test$shan_div))
+
+```
+
+
+## Random Forest
+
+```{r}
+
+sh.rf <- randomForest(data = rfdata, shan_div ~ Fire + tmin + tmean + tmax +
+                          tdmean + vmax + vmin + ppt + lag.ppt + lag.tmin + lag.tmean + lag.tmax +
+                          lag.tdmean + lag.vmax + lag.vmin + lag.ppt+ season + yst )
+
+sh.rf
+
+plot(sh.rf)
+
+varImpPlot(sh.rf)
+
+sh.rf.pred <- predict(sh.rf, newdata = rftest)
+
+roc.rf.sh <- roc(rftest$shan_div, sh.rf.pred)
+
+auc(roc.rf.sh)
+
+importance(sh.rf)
+
+```
+
