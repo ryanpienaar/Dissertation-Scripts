@@ -1,0 +1,2142 @@
+---
+title: "Elk_burn"
+author: "R Pienaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 5, fig.height = 4)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+
+
+Libraries
+
+```{r}
+# Load in libraries
+library(camtrapR)
+library(dplyr)
+library(ggplot2)
+library(devtools)
+library(unmarked)
+library(scales)
+library(lubridate)
+# Install autoOcc incase you have not yet
+# devtools::install_github(
+#   "mfidino/autoOcc",
+#   build_vignettes = TRUE
+# )
+library(autoOcc)
+
+common_theme <- theme(
+    text = element_text(family = "serif", size = 12, color = "black"),
+    axis.title = element_text(size = 16, color = "black"),
+    axis.text = element_text(size = 16, color = "black"),
+    legend.text = element_text(size = 16, color = "black"),
+    legend.title = element_text(size = 16, color = "black"),
+    plot.title = element_text(size = 16, color = "black"),
+    plot.subtitle = element_text(size = 16, color = "black"),
+    plot.caption = element_text(size = 16, color = "black")
+  )
+
+vals <- c("A" = "#E69F00",  # orange
+             "M" = "#56B4E9",  # sky blue
+             "J" = "#009E73") # bluish green
+labs <- c("Aspen Conifer", 
+             "Pinyon Juniper",
+             "Oak Maple")
+
+```
+
+
+```{r}
+
+
+# Create a plots sub-folder as well to store figures
+#  from analysis
+dir.create("plots")
+getwd()
+# Set your local working directory and load in data that is stored
+#  in autoOcc package.
+
+
+#Load elk tables
+ct <- read.csv("C:/Users/ryanp/Documents/Academia/Dissertation/Chapter4_Camera traps/Camelot Exports/Record Tables/ct_summary.csv")
+head(ct)
+
+data <- read.csv("C:/Users/ryanp/Documents/Academia/Dissertation/Chapter4_Camera traps/Camelot Exports/Record Tables/Record_table_mainpulated.csv")
+head(data)
+
+
+
+
+```
+
+
+
+```{r}
+# Create a detection history for each Year
+camop <- cameraOperation(CTtable      = ct,
+                                    stationCol   = "Station",
+                                    sessionCol = "Session",
+                                    setupCol     = "Setup_date",
+                                    retrievalCol = "Retrieval_date",
+                                    hasProblems  = FALSE,
+                                    dateFormat   = "mdy")
+# without trapping effort
+DetHist1 <- detectionHistory(recordTable         = data,
+                            camOp                = camop,
+                           species = "Cervus elaphus",
+                            stationCol = "Station",
+                            speciesCol = "Species",
+                            recordDateTimeCol = "Date",
+                            recordDateTimeFormat = "mdy",
+                            occasionLength = 14,
+                            scaleEffort = FALSE,
+                            timeZone = "MST",
+                            day1 = "survey",
+                            unmarkedMultFrameInput = TRUE)
+
+elkdh <- DetHist1$detection_history
+head(elkdh)
+s1 <- elkdh[,1:25]
+#s1$Year <- 1
+s2 <- elkdh[,26:50]
+#s2$Year <- 2
+s3 <- elkdh[,51:75]
+#s3$Year <- 3
+s4 <- elkdh[,76:100]
+#s4$Year <- 4
+
+dh <- rbind(s1,s2,s3,s4)
+
+sequence <- rep(1:4, each = 32)
+dh <- as.data.frame(dh)
+dh$Year<- sequence
+dh$site <- substr(row.names(dh),1,9)
+
+#Create covariates for each site
+elk_covariates <- as.data.frame(rownames(DetHist1$detection_history))
+elk_covariates$Forest <- substr(elk_covariates$`rownames(DetHist1$detection_history)`,5,5)
+elk_covariates$Fire <- substr(elk_covariates$`rownames(DetHist1$detection_history)`,7,7)
+
+colnames(elk_covariates) <- c("Site", "Forest", "Fire")
+
+# examine data
+head(opossum_det_hist) 
+head(dh)
+
+#Create a Year column in DH
+
+length(rownames(dh))
+
+#### Create a list of seasons ####
+# Create the original list of dates
+start_date <- as.Date("2019-09-23")
+original_dates <- seq.Date(start_date, by = "14 days", length.out = 100)
+original_dates
+# Function to determine the season
+get_season <- function(date) {
+  month <- month(date)
+  if (month %in% c(11, 12, 1, 2)) {
+    return("Winter")
+  } else if (month %in% c(3, 4)) {
+    return("Spring")
+  } else if (month %in% c(5, 6, 7, 8)) {
+    return("Summer")
+  } else if (month %in% c(9, 10)) {
+    return("Fall")
+  }
+}
+
+# Try again but with how Roerick et al. defined seasons
+get_season <- function(date) {
+  month <- month(date)
+  if (month %in% c(12, 1, 2)) {
+    return("Winter")
+  } else if (month %in% c(3, 4)) {
+    return("Spring")
+  } else if (month %in% c(5, 6, 7, 8, 9)) {
+    return("Summer")
+  } else if (month %in% c(11, 10)) {
+    return("Fall")
+  }
+}
+
+# Create the new list of seasons
+seasons <- sapply(original_dates, get_season)
+
+# Print the list of seasons
+seasons
+
+
+```
+
+```{r}
+
+
+##elk
+elk_y <- format_y(
+  x = dh,
+  site_column = "site",
+  time_column = "Year",
+  history_columns = 1:25
+)
+
+
+
+```
+
+Determine best detection model to be used to answer all questions
+
+```{r}
+
+
+
+
+# make named list (don't worry about the warning)
+Year_frame <- list(
+   Year = matrix(
+     dh$Year,
+     ncol = dim(elk_y)[2],
+     nrow = dim(elk_y)[1]
+   ),
+   Forest = elk_covariates$Forest,
+   Fire = elk_covariates$Fire
+ )
+
+# modeling with no covariates
+pnull <- auto_occ(
+  formula = ~1  # detection
+            ~1, # occupancy
+  y = elk_y
+)
+
+
+
+p1 <- auto_occ(
+      ~ Forest
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p2 <- auto_occ(
+      ~ Fire
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p3 <- auto_occ(
+      ~ Year
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+
+p4 <- auto_occ(
+      ~ Forest + Fire
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p5 <- auto_occ(
+      ~ Forest * Fire
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p6 <- auto_occ(
+      ~ Forest + Year
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p7 <- auto_occ(
+      ~ Forest * Year
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p8 <- auto_occ(
+      ~ Fire + Year
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+p9 <- auto_occ(
+      ~ Fire * Year
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame
+)
+
+detection.aic <- compare_models(
+  list(null = pnull,
+       Forest = p1,
+       Fire = p2,
+       Year = p3,
+       `Forest+Fire` = p4,
+       `Forest*Fire` = p5,
+       `Forest+Year` = p6,
+       `Forest*Year` =p7,
+       `Fire+Year` = p8,
+       `Fire*Year` = p9),
+  digits = 2
+)
+
+efd<- detection.aic
+efd
+
+summary(p7)
+#write.csv(efd, "Elk_Fire Detection.csv")
+### Best model is model 7 Forest * Year acounting for 92% of the weight
+
+```
+
+
+Question 1
+How does occupancy change in response to fire across forest types?
+
+```{r}
+
+q1 <- auto_occ(
+  ~Forest * Year
+  ~ Forest * Fire,
+  y = elk_y,
+  det_covs = Year_frame,
+  occ_covs = Year_frame
+)
+
+summary(q1)
+
+
+
+nd1 <- data.frame(Forest= "A", Fire=as.factor(1))
+nd2 <- data.frame(Forest= "A", Fire=as.factor(0))
+nd3 <- data.frame(Forest= "J", Fire=as.factor(1))
+nd4 <- data.frame(Forest= "J", Fire=as.factor(0))
+nd5 <- data.frame(Forest= "M", Fire=as.factor(1))
+nd6 <- data.frame(Forest= "M", Fire=as.factor(0))
+
+nd <- rbind(nd1,nd2,nd3,nd4,nd5,nd6)
+nd
+
+q1.predict <- predict(q1, type = "psi", newdata = nd)
+q1.predict <- cbind(nd, q1.predict)
+q1.predict
+
+q1_b <- summary(q1)
+
+dq1_b <- q1_b@rho
+oq1_b <- q1_b@psi
+
+write.csv(dq1_b, "Det_Elk_Q1_Betas.csv")
+write.csv(oq1_b, "Occ_Elk_Q1_Betas.csv")
+
+# Create the plot using the defined jitter position
+e5<- ggplot(data = q1.predict, aes(x = factor(Forest, level = c("A", "M", "J")), y = estimate, 
+                              colour = factor(Fire, level =c("0", "1")))) +
+  geom_point(size = 2, position = position_dodge(0.5)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2, position = position_dodge(0.5)) +
+  ylab("Elk Occupancy")+
+  theme_classic()+
+  theme(text = element_text(family = "serif", size = 12))+
+  #scale_x_discrete(label = c("Aspen\nConifer","Oak\nMaple" ,
+  #                           "Pinyon\nJuniper"   ))+
+  theme(axis.text.x = element_blank())+
+  scale_color_manual(values = c("0" = "blue", "1" = "red"),labels = c("Unburned", "Burned"))+
+  common_theme+
+  ylim(0,1)+
+  xlab(element_blank())+
+  labs(color = "Burn status")+
+  theme(legend.position= c(0.8,0.2))
+
+e5
+
+```
+
+New year by fire for each forest models
+
+```{r}
+
+# 
+# q1.2 = auto_occ(
+#   ~Forest * Year
+#   ~ Forest * Fire* Year,
+#   y = elk_y,
+#   det_covs = Year_frame,
+#   occ_covs = Year_frame
+# )
+# 
+# summary(q1.2)
+# 
+# # Create detection histories for each
+# elk_y
+# elk_a = elk_y[substr(dimnames(elk_y)[[1]], 5, 5) == "A", , ]
+# elk_j = elk_y[substr(dimnames(elk_y)[[1]], 5, 5) == "J", , ]
+# elk_m = elk_y[substr(dimnames(elk_y)[[1]], 5, 5) == "M", , ]
+# 
+# # Get covariates for each forest type
+# rows_with_A <- Year_frame$Forest == "A"
+# 
+# # Filter each element of the list
+# aspenonly = lapply(Year_frame, function(df) {
+#   if (is.data.frame(df)) {
+#     # If df is a dataframe, subset with two dimensions
+#     df[rows_with_A, , drop = FALSE]
+#   } else {
+#     # If df is a vector, subset with a single dimension
+#     df[rows_with_A]
+#   }
+# })
+# 
+# #Year and season got outputted to lists of 48 instead of 12 x 4s so we need to out them into the right format
+# aspenonly$Year <- matrix(aspenonly$Year, nrow = 12, ncol = 4)
+# 
+# 
+# rows_with_M <- Year_frame$Forest == "M"
+# 
+# # Filter each element of the list
+# mapleonly = lapply(Year_frame, function(df) {
+#   if (is.data.frame(df)) {
+#     # If df is a dataframe, subset with two dimensions
+#     df[rows_with_M, , drop = FALSE]
+#   } else {
+#     # If df is a vector, subset with a single dimension
+#     df[rows_with_M]
+#   }
+# })
+# 
+# mapleonly$Year <- matrix(mapleonly$Year, nrow = 8, ncol = 4)
+# 
+# 
+# rows_with_J <- Year_frame$Forest == "J"
+# 
+# # Filter each element of the list
+# juniperonly = lapply(Year_frame, function(df) {
+#   if (is.data.frame(df)) {
+#     # If df is a dataframe, subset with two dimensions
+#     df[rows_with_J, , drop = FALSE]
+#   } else {
+#     # If df is a vector, subset with a single dimension
+#     df[rows_with_J]
+#   }
+# })
+# 
+# juniperonly$Year <- matrix(juniperonly$Year, nrow = 12, ncol = 4)
+# 
+
+
+```
+
+Create the individual models
+
+```{r}
+
+# aonlymod <- auto_occ(
+#   ~ Fire * Year
+#   ~ Fire  * Year,
+#   y = elk_a,
+#   det_covs = aspenonly,
+#   occ_covs = aspenonly
+# )
+# 
+# summary(aonlymod)
+# 
+# aonlynull <- auto_occ(
+#   ~ Fire * Year
+#   ~ 1,
+#   y = elk_a,
+#   det_covs = aspenonly,
+#   occ_covs = aspenonly
+# )
+# 
+# 
+# summary(aonlynull)
+# 
+# aspen.pred <- predict(aonlymod, type = "psi")
+# 
+# e.a.g <- ggplot(data = aspen.pred, aes(y= estimate, x= Year, colour = Fire))+
+#   geom_smooth()+
+#   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1, linetype = "dashed", fill = "white")+
+#   theme_classic()+
+#   ylab("Occupancy")+
+#   labs(color = "Forest Type")+
+#   scale_color_manual(values = c("0" = "blue", "1"= "red"),label = c("Unburned", 
+#                             "Burned"))+
+#   theme(plot.title    = element_text(size=12, family = "serif", colour = "black"),
+#         plot.subtitle = element_text(size=12, family = "serif"),
+#         axis.title.x  = element_text(size=12, family = "serif", colour = "black"),
+#         axis.title.y  = element_text(size=12, family = "serif", colour = "black"),
+#         axis.text.x   = element_text(size=12, family = "serif", colour = "black"),
+#         axis.text.y   = element_text(size=12, family = "serif", colour = "black"),
+#         legend.text   = element_text(size=12, family = "serif", colour = "black"),
+#         legend.title  = element_text(size=12, family = "serif", colour = "black"),
+#         panel.border  = element_blank())+
+#   scale_y_continuous(limits = c(0, 1))
+# 
+# monlymod <- auto_occ(
+#   ~ Fire * Year
+#   ~ Fire  * Year,
+#   y = elk_m,
+#   det_covs = mapleonly,
+#   occ_covs = mapleonly
+# )
+# 
+# summary(monlymod)
+# 
+# monlynull <- auto_occ(
+#   ~ Fire * Year
+#   ~ 1,
+#   y = elk_m,
+#   det_covs = mapleonly,
+#   occ_covs = mapleonly
+# )
+# 
+# summary(monlynull)
+# 
+# maple.pred <- predict(monlymod, type = "psi")
+# 
+# e.m.g <- ggplot(data = maple.pred, aes(y= estimate, x= Year, colour = Fire))+
+#   geom_smooth()+
+#   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1, linetype = "dashed", fill = "white")+
+#   theme_classic()+
+#   ylab("Occupancy")+
+#   labs(color = "Forest Type")+
+#   scale_color_manual(values = c("0" = "blue", "1"= "red"),label = c("Unburned", 
+#                             "Burned"))+
+#   theme(plot.title    = element_text(size=16, family = "serif", colour = "black"),
+#         plot.subtitle = element_text(size=16, family = "serif"),
+#         axis.title.x  = element_text(size=16, family = "serif", colour = "black"),
+#         axis.title.y  = element_text(size=16, family = "serif", colour = "black"),
+#         axis.text.x   = element_text(size=16, family = "serif", colour = "black"),
+#         axis.text.y   = element_text(size=16, family = "serif", colour = "black"),
+#         legend.text   = element_text(size=16, family = "serif", colour = "black"),
+#         legend.title  = element_text(size=16, family = "serif", colour = "black"))+
+#   scale_y_continuous(limits = c(0, 1))
+# 
+# jonlymod <- auto_occ(
+#   ~ Fire * Year
+#   ~ Fire  * Year,
+#   y = elk_j,
+#   det_covs = juniperonly,
+#   occ_covs = juniperonly
+# )
+# 
+# summary(jonlymod)
+# 
+# jonlynull <- auto_occ(
+#   ~ Fire * Year
+#   ~ 1,
+#   y = elk_j,
+#   det_covs = juniperonly,
+#   occ_covs = juniperonly
+# )
+# 
+# summary(jonlynull)
+# 
+# juniper.pred <- predict(jonlymod, type = "psi")
+# 
+# e.j.g <- ggplot(data = juniper.pred, aes(y= estimate, x= Year, colour = Fire))+
+#   geom_smooth()+
+#   geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1, linetype = "dashed", fill = "white")+
+#   theme_classic()+
+#   ylab("Occupancy")+
+#   labs(color = "Forest Type")+
+#   scale_color_manual(values = c("0" = "blue", "1"= "red"),label = c("Unburned", 
+#                             "Burned"))+
+#   theme(plot.title    = element_text(size=16, family = "serif", colour = "black"),
+#         plot.subtitle = element_text(size=16, family = "serif"),
+#         axis.title.x  = element_text(size=16, family = "serif", colour = "black"),
+#         axis.title.y  = element_text(size=16, family = "serif", colour = "black"),
+#         axis.text.x   = element_text(size=16, family = "serif", colour = "black"),
+#         axis.text.y   = element_text(size=16, family = "serif", colour = "black"),
+#         legend.text   = element_text(size=16, family = "serif", colour = "black"),
+#         legend.title  = element_text(size=16, family = "serif", colour = "black"),
+#         panel.border  = element_blank())+
+#   scale_y_continuous(limits = c(0, 1))
+
+
+
+```
+
+
+
+
+
+
+
+
+Question 3
+How does occupancy vary across time in burned areas across forest types?
+This is where model selection comes in 
+
+Fitting models
+
+```{r}
+
+
+
+# make named list (don't worry about the warning)
+Year_frame <- list(
+   Year = matrix(
+     dh$Year,
+     ncol = dim(elk_y)[2],
+     nrow = dim(elk_y)[1]
+   ),
+   Forest = elk_covariates$Forest,
+   Fire = elk_covariates$Fire
+ )
+
+
+### Lets find the best occupancy model
+
+# Find best occupancy model
+psinull <- auto_occ(
+      ~ Forest* Year
+      ~1,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi1 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi2 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi3 <- auto_occ(
+      ~ Forest* Year
+      ~ Year,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+
+psi4 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire + Forest,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi5 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire * Forest,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi6 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire + Year,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi7 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire * Year,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi8 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest + Year,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi9 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest * Year,
+      y= elk_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+# Comparing models
+psi.aic <- compare_models(
+  list(null = psinull,
+       Forest = psi1,
+       Fire = psi2,
+       Year = psi3,
+       `Fire+Forest` = psi4,
+       `Fire*Forest` = psi5,
+       `Fire+Year` = psi6,
+       `Fire*Year` =psi7,
+       `Forest+Year` = psi8,
+       `Forest*Year` = psi9),
+  digits = 2
+)
+
+
+psi.aic
+summary(psi2)
+#plogis(summary(psi2))
+#plogis(psi2@estimates$Est)
+#psi.aic
+
+### Plot best model
+bef <- predict(psi2, type = "psi")
+
+bef
+
+efb <- summary(psi2)
+
+defb <- efb@rho
+oefb <- efb@psi
+
+write.csv(defb, "Det_Elk_Fire_Betas.csv")
+write.csv(oefb, "Occ_Elk_Fire_Betas.csv")
+
+
+elk1 <- ggplot(data = bef, aes(x= Fire , y= estimate, colour = Fire))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower, ymax = upper, width = 0.2))+
+  theme_classic()+
+  ylim(0,1)+
+  ylab("Elk Occupancy")+
+  theme_classic()+
+  scale_color_manual(
+    values = vals,
+    labels = labs)+
+  scale_fill_manual(
+    values = vals,
+    labels = labs)+
+  scale_x_continuous(breaks = 1:4, labels = c("2020", "2021", "2022", "2023")) +  # Change x-axis labels
+  common_theme
+
+elk1
+
+
+efo <- psi.aic
+#write.csv(efo, "Elk_Fire_Occupancy.csv")
+
+variables <- list(
+  Forest = c("Forest*Year", "Forest", "Forest+Fire", "Forest+Year", "Forest*Fire"),
+  Year = c("Forest*Year", "Forest+Year", "Year", "Fire+Year", "Fire*Year"),
+  Fire = c("Forest+Fire", "Fire", "Forest*Fire", "Fire+Year", "Fire*Year")
+)
+
+#### Lots of top competing models
+
+#Calculate relative variable importance
+
+importance<- sapply(variables, function(models){
+  sum(psi.aic$AICwt[psi.aic$model %in% models])
+})
+
+importance <- as.data.frame(importance)
+importance$variable <- row.names(importance)
+
+elk_importance <- importance
+
+
+elk_imp <- ggplot(importance, aes(y = importance, x = variable)) +
+  geom_col(size = 3, fill = "#666666", width = 0.75) +
+  geom_text(aes(label = importance), vjust = -0.2, size = 4) +
+  labs(y = "Elk Occupancy \n Relative Importance (w+)", x = "Predictor Variable") +
+  scale_x_discrete(label =c("Fire", "Forest", "Year"))+
+  theme_classic() +
+  ylim(0, 1)+
+  common_theme+
+    scale_y_continuous(expand = c(0, 0), limits = c(0,1))
+
+elk_imp
+
+plogis(1.01)
+plogis(0.17)
+
+```
+
+Model Averaging
+
+```{r}
+
+# To model average, get the parameters in each model,
+# and set up a binary matrix to denote if they were present or not in that model.
+
+# create model list again
+model_list <- list(a=psinull,b=psi1,c=psi2,d=psi3,e=psi4,f=psi5,g=psi6,h=psi7, i=psi8, j=psi9)
+
+# and AIC results
+aic_results <- compare_models(
+  model_list
+)
+
+aic_results
+
+# keep only models with AIC weight > 0.05
+keep_idx <- which(aic_results$AICwt > 0.05)
+
+aic_results <- aic_results[keep_idx, ]
+model_list  <- model_list[keep_idx]
+
+# reorder the model_list based on relative fit
+model_list <- model_list[aic_results$model]
+model_list <- model_list[!sapply(model_list, is.null)]
+model_list
+
+
+aic_results$model
+# specify confidence interval width
+my_ci_width <- 0.95
+
+
+# get only the model parameters 
+parms <- lapply(
+  model_list,
+  function(x){
+    x@estimates$parameter
+  }
+)
+
+
+# select only unique parameters
+all_parms <- unique(
+  unlist(
+    parms
+  )
+)
+
+# make an empty matrix
+parm_matrix <- matrix(
+  0,
+  ncol = length(
+    all_parms
+  ),
+  nrow = length(
+    model_list
+  )
+)
+colnames(parm_matrix) <- all_parms
+
+# Add '1's to models which have parameter present
+for(i in 1:nrow(parm_matrix)){
+  parm_matrix[i, parms[[i]]] <- 1
+}
+
+# calculate overall weight for each parameter. The easiest
+#  way to do this is to make a weight matrix.
+weight_matrix <- matrix(
+  aic_results$AICwt,
+  nrow = length(model_list),
+  ncol = length(all_parms)
+)
+
+parm_weight <- colSums(
+  parm_matrix * weight_matrix
+)
+
+parm_weight
+
+#  We are going to take samples from the parameters (which
+#  is the same thing we do to make predictions
+#  via autoOcc::predict). To do that, we need
+#  to get the variance covariance matrix
+#  for each model.
+
+cov_mat <- lapply(
+  model_list,
+  vcov
+)
+
+# and now the estimates (assuming you are not
+# using any offsets in the model for this).
+
+ests <- lapply(
+  model_list,
+  function(x) x@estimates$Est
+)
+
+# do 5000 samples for each parameter.
+mvn_samps <- vector(
+  "list",
+  length = length(model_list)
+)
+nsim = 5000
+set.seed(465)
+for(i in 1:length(mvn_samps)){
+  mvn_samps[[i]] <- mvtnorm::rmvnorm(
+    nsim,
+    mean = ests[[i]],
+    sigma = cov_mat[[i]],
+    method = "svd"
+  )
+  colnames(mvn_samps[[i]]) <- parms[[i]]
+}
+
+# do model averaging for each parameter
+avg_parm <- data.frame(
+  parameter = all_parms,
+  est = NA,
+  lower = NA,
+  upper = NA
+)
+
+for(i in 1:nrow(avg_parm)){
+  my_parm <- avg_parm$parameter[i]
+  which_models <- which(
+    parm_matrix[,i] == 1
+  )
+  
+  weights <- weight_matrix[
+    which_models,i
+  ] * parm_matrix[
+    which_models,i
+  ]
+  
+  # get beta terms
+  beta_mat <- matrix(
+    NA,
+    ncol = length(which_models),
+    nrow = nsim
+  )
+  
+  # multiply weight across columns while we do this
+  for(j in 1:ncol(beta_mat)){
+    beta_mat[,j] <- mvn_samps[[which_models[j]]][,my_parm] *
+      weights[j]
+  }
+  
+  # sum each row
+  beta_mat <- rowSums(beta_mat)
+  
+  # divide by overall weight
+  beta_mat <- beta_mat / parm_weight[i]
+  
+  # summarise
+  avg_parm$est[i] <- median(beta_mat)
+  avg_parm$lower[i] <- quantile(
+    beta_mat,
+    (1 - my_ci_width) / 2
+  )
+  avg_parm$upper[i] <- quantile(
+    beta_mat,
+    1 - ( (1 - my_ci_width) / 2 )
+  )
+  
+}
+
+
+# get average estimate
+avg_parm %>% 
+  mutate(
+    across(
+      where(is.numeric), ~ round(., digits = 2))
+    )
+  
+avg_parm
+
+data_filtered <- avg_parm %>%
+  filter(!grepl("^rho", parameter))
+
+data_filtered
+
+ggplot(data= data_filtered, aes(x = est, y = parameter)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0.2) +
+  labs(title = "Elk Fire",
+       x = "Estimate",
+       y = "Parameter") +
+  theme_classic()+
+  common_theme+
+  xlim(-7.5,7.5)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+Isolate seasons and run occupancy models separately
+
+```{r}
+
+dh
+
+# make named list (don't worry about the warning)
+Year_frame <- list(
+   Year = matrix(
+     dh$Year,
+     ncol = dim(elk_y)[2],
+     nrow = dim(elk_y)[1]
+   ),
+   Forest = elk_covariates$Forest,
+   Fire = elk_covariates$Fire,
+   Season = matrix(seasons,
+                   ncol = dim(elk_y)[2],
+     nrow = dim(elk_y)[1])
+                   
+ )
+
+Year_frame
+
+seasons_dh <- DetHist1$detection_history
+colnames(seasons_dh) <- seasons
+head(seasons_dh)
+
+
+
+###### Find seasons correctly #######
+
+# Use seasons dh
+summer_positions <- which(seasons == "Summer")
+
+summer_dh <- DetHist1$detection_history[,summer_positions]
+summer_dh
+
+s1 <- summer_dh[,1:12]
+
+s2 <- summer_dh[,13:23]
+
+s3 <- summer_dh[,24:34]
+
+s4 <- summer_dh[,35:40]
+
+# Make s4 the same length as the others
+s2 <- cbind(s2,matrix(NA,nrow = 32, ncol = 1))
+s3 <- cbind(s3,matrix(NA,nrow = 32, ncol = 1))
+s4 <- cbind(s4,matrix(NA,nrow = 32, ncol = 6))
+
+
+summer_dh <- rbind(s1,s2,s3,s4)
+
+
+summer_dh <- as.data.frame(summer_dh)
+summer_dh$Year<- sequence
+summer_dh$site <- substr(row.names(summer_dh),1,9)
+
+summer_y <- format_y(
+  x = summer_dh,
+  site_column = "site",
+  time_column = "Year", 
+  history_columns = 1:9
+)
+
+head(summer_y)
+
+#### Subset only winter detection histories ####
+
+winter_positions <- which(seasons == "Winter")
+
+winter_dh <- DetHist1$detection_history[,winter_positions]
+winter_dh
+
+s1 <- winter_dh[,1:7]
+
+s2 <- winter_dh[,8:13]
+
+s3 <- winter_dh[,14:19]
+
+s4 <- winter_dh[,20:25] ## More winters than summers cos of when we collected
+
+# Make s4 the same length as the others
+s2 <- cbind(s4,matrix(NA,nrow = 32, ncol = 1))
+s3 <- cbind(s4,matrix(NA,nrow = 32, ncol = 1))
+s4 <- cbind(s4,matrix(NA,nrow = 32, ncol = 1))
+
+
+winter_dh <- rbind(s1,s2,s3,s4)
+
+
+winter_dh <- as.data.frame(winter_dh)
+winter_dh$Year<- sequence
+winter_dh$site <- substr(row.names(winter_dh),1,9)
+
+winter_y <- format_y(
+  x = winter_dh,
+  site_column = "site",
+  time_column = "Year", 
+  history_columns = 1:7
+)
+
+head(winter_y)
+
+#### Subset only fall detection histories ####
+
+fall_positions <- which(seasons == "Fall")
+
+fall_dh <- DetHist1$detection_history[,fall_positions]
+fall_dh
+
+s1 <- fall_dh[,1:4]
+
+s2 <- fall_dh[,5:9]
+
+s3 <- fall_dh[,10:14]
+
+s4 <- fall_dh[,15:19] 
+
+# Make s1 the same length as the others
+s1 <- cbind(s1,matrix(NA,nrow = 32, ncol = 1))
+
+
+fall_dh <- rbind(s1,s2,s3,s4)
+
+
+fall_dh <- as.data.frame(fall_dh)
+fall_dh$Year<- sequence
+fall_dh$site <- substr(row.names(fall_dh),1,9)
+
+fall_y <- format_y(
+  x = fall_dh,
+  site_column = "site",
+  time_column = "Year", 
+  history_columns = 1:5
+)
+
+head(fall_y)
+
+#### Subset only spring detection histories ####
+
+spring_positions <- which(seasons == "Spring")
+
+spring_dh <- DetHist1$detection_history[,spring_positions]
+spring_dh
+
+s1 <- spring_dh[,1:4]
+
+s2 <- spring_dh[,5:8]
+
+s3 <- spring_dh[,9:12]
+
+s4 <- spring_dh[,13:16] ## More winters than summers cos of when we collected
+
+
+spring_dh <- rbind(s1,s2,s3,s4)
+
+
+spring_dh <- as.data.frame(spring_dh)
+spring_dh$Year<- sequence
+spring_dh$site <- substr(row.names(spring_dh),1,9)
+
+spring_y <- format_y(
+  x = spring_dh,
+  site_column = "site",
+  time_column = "Year", 
+  history_columns = 1:4
+)
+
+head(spring_y)
+
+
+
+
+```
+
+Rerun model selections on each season
+# Start with summer
+
+```{r}
+
+# Find best detection model
+
+p.sum.d.null <- auto_occ(
+      ~ 1
+      ~1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.1 <- auto_occ(
+      ~ Forest
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.2 <- auto_occ(
+      ~ Fire
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.3 <- auto_occ(
+      ~ Year
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.sum.d.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.sum.d.5 <- auto_occ(
+      ~ Forest* Fire
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.6 <- auto_occ(
+      ~ Forest + Year
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.7 <- auto_occ(
+      ~ Forest* Year
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.8 <- auto_occ(
+      ~ Fire + Year
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.sum.d.9 <- auto_occ(
+      ~ Fire * Year
+      ~ 1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+p.sum.d..aic <- compare_models(
+  list(null = p.sum.d.null,
+       Forest = p.sum.d.1,
+       Fire = p.sum.d.2,
+       Year = p.sum.d.3,
+       `Forest+Fire` = p.sum.d.4,
+       `Forest*Fire` = p.sum.d.5,
+       `Forest+Year` = p.sum.d.6,
+       `Forest*Year` =p.sum.d.7,
+       `Fire+Year` = p.sum.d.8,
+       `Fire*Year` = p.sum.d.9),
+  digits = 2
+)
+
+p.sum.d..aic
+write.csv(p.sum.d..aic, "Det_Elk_Fire_Summer.csv")
+
+# Find best occupancy model
+psi.sum.d.null <- auto_occ(
+      ~ Forest + Fire
+      ~1,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.1 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.2 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.3 <- auto_occ(
+      ~ Forest + Fire
+      ~ Year,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.sum.d.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest + Fire,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.sum.d.5 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest * Fire,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.6 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest + Year,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.7 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest * Year,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.8 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire + Year,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.sum.d.9 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire * Year,
+      y= summer_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+psi.sum.d..aic <- compare_models(
+  list(null = psi.sum.d.null,
+       Forest = psi.sum.d.1,
+       Fire = psi.sum.d.2,
+       Year = psi.sum.d.3,
+       `Forest+Fire` = psi.sum.d.4,
+       `Forest*Fire` = psi.sum.d.5,
+       `Forest+Year` = psi.sum.d.6,
+       `Forest*Year` =psi.sum.d.7,
+       `Fire+Year` = psi.sum.d.8,
+       `Fire*Year` = psi.sum.d.9),
+  digits = 2
+)
+
+psi.sum.d..aic
+
+# Best model is 7
+
+pred.elk.sum <- predict(psi.sum.d.7, type = "psi")
+
+sum_b <- summary(psi.sum.d.7)
+
+dsum_b <- sum_b@rho
+osum_b <- sum_b@psi
+
+write.csv(dsum_b, "Det_Elk_Summer_Betas.csv")
+write.csv(osum_b, "Occ_Elk_Summer_Betas.csv")
+
+
+##### Plot it again without the legend 
+
+e.summer <- ggplot(data = pred.elk.sum, aes(y= estimate, x= Year, colour = Forest, fill = Forest))+
+  geom_smooth()+
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1, linetype = "dashed")+
+  theme_classic()+
+  ylab("Summer Elk Occupancy")+
+  scale_color_manual(
+    values = vals,
+    labels = labs)+
+  scale_fill_manual(
+    values = vals,
+    labels = labs)+
+  common_theme+
+  scale_y_continuous(limits = c(0, 1))+
+  scale_x_continuous(breaks = 1:4, labels = c("2020", "2021", "2022", "2023")) 
+
+
+write.csv(psi.sum.d..aic, "Occ_Elk_Fire_Summer.csv")
+
+```
+
+# Winter only occupancy
+
+```{r}
+
+# Find best detection model
+
+
+p.win.d.null <- auto_occ(
+      ~ 1
+      ~1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.1 <- auto_occ(
+      ~ Forest
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.2 <- auto_occ(
+      ~ Fire
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.3 <- auto_occ(
+      ~ Year
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.wind.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.wind.5 <- auto_occ(
+      ~ Forest* Fire
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.6 <- auto_occ(
+      ~ Forest + Year
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.7 <- auto_occ(
+      ~ Forest* Year
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.8 <- auto_occ(
+      ~ Fire + Year
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.wind.9 <- auto_occ(
+      ~ Fire * Year
+      ~ 1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+p.wind.aic <- compare_models(
+  list(null = p.win.d.null,
+       Forest = p.wind.1,
+       Fire = p.wind.2,
+       Year = p.wind.3,
+       `Forest+Fire` = p.wind.4,
+       `Forest*Fire` = p.wind.5,
+       `Forest+Year` = p.wind.6,
+       `Forest*Year` =p.wind.7,
+       `Fire+Year` = p.wind.8,
+       `Fire*Year` = p.wind.9),
+  digits = 2
+)
+
+p.wind.aic
+
+write.csv(p.wind.aic, "Det_Elk_Fire_Winter.csv")
+
+# Find best occupancy model
+psi.wind.null <- auto_occ(
+      ~ Forest* Year
+      ~1,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.1 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.2 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.3 <- auto_occ(
+      ~ Forest* Year
+      ~ Year,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.wind.4 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest + Fire,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.wind.5 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest * Fire,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.6 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest + Year,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.7 <- auto_occ(
+      ~ Forest* Year
+      ~ Forest * Year,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.8 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire + Year,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.wind.9 <- auto_occ(
+      ~ Forest* Year
+      ~ Fire * Year,
+      y= winter_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+psi.wind..aic <- compare_models(
+  list(null = psi.wind.null,
+       Forest = psi.wind.1,
+       Fire = psi.wind.2,
+       Year = psi.wind.3,
+       `Forest+Fire` = psi.wind.4,
+       `Forest*Fire` = psi.wind.5,
+       `Forest+Year` = psi.wind.6,
+       `Forest*Year` =psi.wind.7,
+       `Fire+Year` = psi.wind.8,
+       `Fire*Year` = psi.wind.9),
+  digits = 2
+)
+
+psi.wind..aic
+
+pred.elk.win <- predict(psi.wind.null, type = "psi")
+
+win_b <- summary(psi.wind.null)
+
+dwin_b <- win_b@rho
+owin_b <- win_b@psi
+
+write.csv(dwin_b, "Det_Elk_Winter_Betas.csv")
+write.csv(owin_b, "Occ_Elk_Winter_Betas.csv")
+
+pred.elk.win$Combined <- as.factor("All Sites")
+
+# 2 is best model
+
+e.winter <- ggplot(data = pred.elk.win, aes(y = estimate, x = Combined)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = lower, ymax = upper, width = 0.2)) +
+  ylim(0, 1) +
+  theme_classic() +
+  ylab("Winter Elk Occupancy") +
+  common_theme+
+  theme(plot.margin = margin(10, 10, 10, 10)) # Same plot margin as above
+
+e.winter
+
+write.csv(psi.wind..aic, "Occ_Elk_Fire_Winter.csv")
+
+```
+
+# Fall only
+
+```{r}
+
+# Find best detection model
+
+p.fall.d.null <- auto_occ(
+      ~ 1
+      ~1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.1 <- auto_occ(
+      ~ Forest
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.2 <- auto_occ(
+      ~ Fire
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.3 <- auto_occ(
+      ~ Year
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.fall.d.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.fall.d.5 <- auto_occ(
+      ~ Forest* Fire
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.6 <- auto_occ(
+      ~ Forest + Year
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.7 <- auto_occ(
+      ~ Forest* Year
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.8 <- auto_occ(
+      ~ Fire + Year
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.fall.d.9 <- auto_occ(
+      ~ Fire * Year
+      ~ 1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+p.fall.d..aic <- compare_models(
+  list(null = p.fall.d.null,
+       Forest = p.fall.d.1,
+       Fire = p.fall.d.2,
+       Year = p.fall.d.3,
+       `Forest+Fire` = p.fall.d.4,
+       `Forest*Fire` = p.fall.d.5,
+       `Forest+Year` = p.fall.d.6,
+       `Forest*Year` =p.fall.d.7,
+       `Fire+Year` = p.fall.d.8,
+       `Fire*Year` = p.fall.d.9),
+  digits = 2
+)
+
+p.fall.d..aic
+
+write.csv(p.fall.d..aic, "Det_Elk_Fire_Fall.csv")
+
+# Find best occupancy model
+psi.fall.d.null <- auto_occ(
+      ~ Forest + Fire
+      ~1,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.1 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.2 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.3 <- auto_occ(
+      ~ Forest + Fire
+      ~ Year,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.fall.d.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest + Fire,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.fall.d.5 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest * Fire,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.6 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest + Year,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.7 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest * Year,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.8 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire + Year,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.fall.d.9 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire * Year,
+      y= fall_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+psi.fall.d..aic <- compare_models(
+  list(null = psi.fall.d.null,
+       Forest = psi.fall.d.1,
+       Fire = psi.fall.d.2,
+       Year = psi.fall.d.3,
+       `Forest+Fire` = psi.fall.d.4,
+       `Forest*Fire` = psi.fall.d.5,
+       `Forest+Year` = psi.fall.d.6,
+       `Forest*Year` =psi.fall.d.7,
+       `Fire+Year` = psi.fall.d.8,
+       `Fire*Year` = psi.fall.d.9),
+  digits = 2
+)
+
+psi.fall.d..aic
+
+pred.elk.fall <- predict(psi.fall.d.null, type = "psi")
+
+fall_b <- summary(psi.fall.d.null)
+
+dfall_b <- fall_b@rho
+ofall_b <- fall_b@psi
+
+write.csv(dfall_b, "Det_Elk_Fall_Betas.csv")
+write.csv(ofall_b, "Occ_Elk_Fall_Betas.csv")
+
+pred.elk.fall$Combined <- as.factor("All Sites")
+
+e.fall <- ggplot(data = pred.elk.fall, aes(y = estimate, x= Combined))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2)+
+  theme_classic()+
+  ylab("Fall Elk Occupancy")+
+  common_theme +
+  scale_y_continuous(limits = c(0, 1)) 
+
+write.csv(psi.fall.d..aic, "Occ_Elk_Fire_Fall.csv")
+
+
+```
+
+
+```{r}
+
+# Find best detection model
+
+p.spr.d.null <- auto_occ(
+      ~ 1
+      ~1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.1 <- auto_occ(
+      ~ Forest
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.2 <- auto_occ(
+      ~ Fire
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.3 <- auto_occ(
+      ~ Year
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.spr.d.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+p.spr.d.5 <- auto_occ(
+      ~ Forest* Fire
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.6 <- auto_occ(
+      ~ Forest + Year
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.7 <- auto_occ(
+      ~ Forest* Year
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.8 <- auto_occ(
+      ~ Fire + Year
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+p.spr.d.9 <- auto_occ(
+      ~ Fire * Year
+      ~ 1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+p.spr.d..aic <- compare_models(
+  list(null = p.spr.d.null,
+       Forest = p.spr.d.1,
+       Fire = p.spr.d.2,
+       Year = p.spr.d.3,
+       `Forest+Fire` = p.spr.d.4,
+       `Forest*Fire` = p.spr.d.5,
+       `Forest+Year` = p.spr.d.6,
+       `Forest*Year` =p.spr.d.7,
+       `Fire+Year` = p.spr.d.8,
+       `Fire*Year` = p.spr.d.9),
+  digits = 2
+)
+
+p.spr.d..aic
+
+write.csv(p.spr.d..aic, "Det_Elk_Fire_Spring.csv")
+
+# Find best occupancy model
+psi.spr.d.null <- auto_occ(
+      ~ Forest + Fire
+      ~1,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.1 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.2 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.3 <- auto_occ(
+      ~ Forest + Fire
+      ~ Year,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.spr.d.4 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest + Fire,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+
+
+psi.spr.d.5 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest * Fire,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.6 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest + Year,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.7 <- auto_occ(
+      ~ Forest + Fire
+      ~ Forest * Year,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.8 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire + Year,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+psi.spr.d.9 <- auto_occ(
+      ~ Forest + Fire
+      ~ Fire * Year,
+      y= spring_y,
+      det_covs = Year_frame,
+      occ_covs = Year_frame
+)
+
+# Comparing models
+psi.spr.d..aic <- compare_models(
+  list(null = psi.spr.d.null,
+       Forest = psi.spr.d.1,
+       Fire = psi.spr.d.2,
+       Year = psi.spr.d.3,
+       `Forest+Fire` = psi.spr.d.4,
+       `Forest*Fire` = psi.spr.d.5,
+       `Forest+Year` = psi.spr.d.6,
+       `Forest*Year` =psi.spr.d.7,
+       `Fire+Year` = psi.spr.d.8,
+       `Fire*Year` = psi.spr.d.9),
+  digits = 2
+)
+
+psi.spr.d..aic
+
+pred.elk.spr <- predict(psi.spr.d.7, type = "psi")
+
+spr_b <- summary(psi.spr.d.7)
+
+dspr_b <- spr_b@rho
+ospr_b <- spr_b@psi
+
+write.csv(dspr_b, "Det_Elk_Spring_Betas.csv")
+write.csv(ospr_b, "Occ_Elk_Spring_Betas.csv")
+
+
+
+e.spring <- ggplot(data = pred.elk.spr, aes(y= estimate, x= Year, colour = Forest, fill = Forest))+
+  geom_smooth()+
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1, linetype = "dashed")+
+  theme_classic()+
+  ylab("Spring Elk Occupancy")+
+  scale_color_manual(
+    values = vals,
+    labels = labs)+
+  scale_fill_manual(
+    values = vals,
+    labels = labs)+
+  common_theme+
+  scale_y_continuous(limits = c(0, 1))
+
+e.spring
+
+write.csv(psi.spr.d..aic, "Occ_Elk_Fire_Spring.csv")
+
+
+```
+
+
+
+```{r}
+
+```
+
+
+
